@@ -12,7 +12,7 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 app = Flask(name)
 
 def home():
-return "Bot is alive!"
+    return "Bot is alive!"
 
 app.add_url_rule("/", "home", home)
 
@@ -61,5 +61,5 @@ application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_m
 print("BOT STARTING")
 application.run_polling()
 
-if name == "main":
-main()
+if __name__ == "__main__":
+    main()
