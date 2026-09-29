@@ -6,7 +6,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import google.generativeai as genai
 
-app = Flask(**name**)
+app = Flask("bot")
 
 @app.route("/")
 def home():
@@ -28,7 +28,6 @@ model = genai.GenerativeModel("gemini-1.5-flash")
 def test_telegram_connection():
 token = os.environ.get("TELEGRAM_TOKEN", "")
 
-```
 print("Testing Telegram connection...")
 
 if not token:
@@ -91,11 +90,7 @@ if not token:
     print("ERROR: TELEGRAM_TOKEN is missing.")
     return
 
-application = (
-    Application.builder()
-    .token(token)
-    .build()
-)
+application = Application.builder().token(token).build()
 
 application.add_handler(
     CommandHandler("start", start)
@@ -111,7 +106,5 @@ application.add_handler(
 print("Telegram bot is starting polling...")
 
 application.run_polling()
-```
 
-if **name** == "**main**":
 main()
