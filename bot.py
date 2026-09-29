@@ -1,70 +1,74 @@
 import os
 import threading
-import google.generativeai as genai
 from flask import Flask
+import google.generativeai as genai
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 
-app = Flask("telegram_bot")
+PORT = int(os.environ.get("PORT", 10000))
 
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+app = Flask(name)
+
+@app.route("/")
+def home():
+return "Bot is alive!"
+
+def run_flask():
+app.run(host="0.0.0.0", port=PORT)
+
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-if GEMINI_API_KEY:
-   genai.configure(api_key=GEMINI_API_KEY)
-   model = genai.GenerativeModel("gemini-2.0-flash")
-else:
-model = None
+if not TELEGRAM_TOKEN:
+raise RuntimeError("TELEGRAM_BOT_TOKEN is not set")
+
+if not GEMINI_API_KEY:
+raise RuntimeError("GEMINI_API_KEY is not set")
+
+genai.configure(api_key=GEMINI_API_KEY)
+
+model = genai.GenerativeModel("gemini-1.5-flash")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-await update.message.reply_text("Hello! Send me a message and I will answer.")
+await update.message.reply_text(
+"Hello! I'm online and ready. Send me a message."
+)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-if update.message is None:
-return
-
-
-message = update.message.text
-
-if not message:
-    return
-
-if model is None:
-    await update.message.reply_text("Gemini API key is missing.")
-    return
-
 try:
-    response = model.generate_content(message)
-    await update.message.reply_text(response.text)
-except Exception as error:
-    print("Gemini error:", error)
-    await update.message.reply_text("Sorry, I could not generate a response.")
+user_message = update.message.text
 
 
-def run_server():
-port = int(os.environ.get("PORT", "10000"))
-app.run(host="0.0.0.0", port=port)
+    response = model.generate_content(user_message)
+
+    if response.text:
+        await update.message.reply_text(response.text)
+    else:
+        await update.message.reply_text(
+            "Sorry, I couldn't generate a response."
+        )
+
+except Exception as e:
+    print(f"ERROR: {e}")
+    await update.message.reply_text(
+        "Sorry, something went wrong while processing your message."
+    )
+
 
 def main():
-    if not TELEGRAM_BOT_TOKEN:
-       print("ERROR: TELEGRAM_BOT_TOKEN is missing.")
-return
+threading.Thread(target=run_flask, daemon=True).start()
 
 
-print("Starting Flask server...")
-server = threading.Thread(target=run_server)
-server.daemon = True
-server.start()
-
-print("Starting Telegram bot...")
-
-application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+application = Application.builder().token(TELEGRAM_TOKEN).build()
 
 application.add_handler(CommandHandler("start", start))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+application.add_handler(
+    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
+)
 
-print("Telegram bot is running.")
+print("Bot is starting...")
 application.run_polling()
 
 
+if name == "main":
 main()
