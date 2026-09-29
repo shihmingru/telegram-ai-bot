@@ -1,3 +1,4 @@
+python
 import os
 import threading
 
@@ -19,12 +20,13 @@ from telegram.ext import (
 # =========================
 
 PORT = int(os.environ.get("PORT", "10000"))
+
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 
 # =========================
-# Flask keep-alive server
+# Flask web server
 # =========================
 
 app = Flask(__name__)
@@ -36,11 +38,26 @@ def home():
 
 
 def run_flask():
-    app.run(host="0.0.0.0", port=PORT)
+    print(f"Starting Flask server on port {PORT}")
+    app.run(
+        host="0.0.0.0",
+        port=PORT,
+        debug=False,
+        use_reloader=False,
+    )
+
+
+# Start Flask immediately so Render can detect the port.
+flask_thread = threading.Thread(
+    target=run_flask,
+    daemon=True,
+)
+
+flask_thread.start()
 
 
 # =========================
-# Check required variables
+# Check environment
 # =========================
 
 if not TELEGRAM_TOKEN:
@@ -54,13 +71,19 @@ if not GEMINI_API_KEY:
 # Gemini
 # =========================
 
+print("Configuring Gemini...")
+
 genai.configure(api_key=GEMINI_API_KEY)
 
-model = genai.GenerativeModel("gemini-1.5-flash")
+model = genai.GenerativeModel(
+    "gemini-1.5-flash"
+)
+
+print("Gemini configured successfully.")
 
 
 # =========================
-# Telegram commands
+# Telegram /start command
 # =========================
 
 async def start(
@@ -73,7 +96,7 @@ async def start(
 
 
 # =========================
-# Telegram messages
+# Telegram message handler
 # =========================
 
 async def handle_message(
@@ -86,6 +109,7 @@ async def handle_message(
 
     try:
         response = model.generate_content(user_message)
+
         reply = response.text
 
         if reply:
@@ -104,23 +128,18 @@ async def handle_message(
 
 
 # =========================
-# Main
+# Start Telegram bot
 # =========================
 
 def main():
-    # Start Flask in a background thread
-    flask_thread = threading.Thread(target=run_flask)
-    flask_thread.daemon = True
-    flask_thread.start()
+    print("Creating Telegram application...")
 
-    # Create Telegram application
     application = (
         Application.builder()
         .token(TELEGRAM_TOKEN)
         .build()
     )
 
-    # Telegram handlers
     application.add_handler(
         CommandHandler("start", start)
     )
@@ -134,9 +153,12 @@ def main():
 
     print("BOT STARTING")
 
-    # Start Telegram bot
     application.run_polling()
 
+
+# =========================
+# Entry point
+# =========================
 
 if __name__ == "__main__":
     main()
