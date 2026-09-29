@@ -10,11 +10,11 @@ app = Flask("bot")
 
 @app.route("/")
 def home():
-return "Bot is alive!"
+    return "Bot is alive!"
 
 def run_flask():
-port = int(os.environ.get("PORT", 10000))
-app.run(host="0.0.0.0", port=port)
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
 
 gemini_key = os.environ.get("GEMINI_API_KEY", "")
 
@@ -27,8 +27,8 @@ model = genai.GenerativeModel("gemini-1.5-flash")
 
 def test_telegram_connection():
 token = os.environ.get("TELEGRAM_TOKEN", "")
-
 print("Testing Telegram connection...")
+
 
 if not token:
     print("ERROR: TELEGRAM_TOKEN is not set.")
@@ -39,13 +39,11 @@ try:
         f"https://api.telegram.org/bot{token}/getMe",
         timeout=15
     )
-
     print("Telegram HTTP status:", response.status_code)
     print("Telegram response:", response.text)
-
 except Exception as e:
     print("Telegram connection error:", repr(e))
-```
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 await update.message.reply_text(
@@ -55,7 +53,7 @@ await update.message.reply_text(
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 user_text = update.message.text
 
-```
+
 try:
     response = model.generate_content(user_text)
 
@@ -65,19 +63,17 @@ try:
         await update.message.reply_text(
             "I couldn't generate a response."
         )
-
 except Exception as e:
     print("Gemini error:", repr(e))
     await update.message.reply_text(
         "Sorry, I encountered an error while processing your message."
     )
-```
+
 
 def main():
 print("Bot is starting...")
-
-```
 test_telegram_connection()
+
 
 threading.Thread(
     target=run_flask,
@@ -104,7 +100,7 @@ application.add_handler(
 )
 
 print("Telegram bot is starting polling...")
-
 application.run_polling()
+
 
 main()
