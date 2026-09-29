@@ -1,106 +1,122 @@
 import os
 import threading
-import requests
 from flask import Flask
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import google.generativeai as genai
 
-app = Flask("bot")
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
+
+# --------------------------------------------------
+
+# Flask web server for Render
+
+# --------------------------------------------------
+
+app = Flask(**name**)
 
 @app.route("/")
 def home():
-    return "Bot is alive!"
+return "Bot is alive!"
 
 def run_flask():
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+port = int(os.environ.get("PORT", 10000))
+app.run(host="0.0.0.0", port=port)
 
-gemini_key = os.environ.get("GEMINI_API_KEY", "")
+# --------------------------------------------------
 
-if not gemini_key:
-print("WARNING: GEMINI_API_KEY is not set.")
+# Environment variables
+
+# --------------------------------------------------
+
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+
+# --------------------------------------------------
+
+# Gemini setup
+
+# --------------------------------------------------
+
+if GEMINI_API_KEY:
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel("gemini-2.0-flash")
 else:
-genai.configure(api_key=gemini_key)
+model = None
 
-model = genai.GenerativeModel("gemini-1.5-flash")
+# --------------------------------------------------
 
-def test_telegram_connection():
-token = os.environ.get("TELEGRAM_TOKEN", "")
-print("Testing Telegram connection...")
+# Telegram commands
 
-
-if not token:
-    print("ERROR: TELEGRAM_TOKEN is not set.")
-    return
-
-try:
-    response = requests.get(
-        f"https://api.telegram.org/bot{token}/getMe",
-        timeout=15
-    )
-    print("Telegram HTTP status:", response.status_code)
-    print("Telegram response:", response.text)
-except Exception as e:
-    print("Telegram connection error:", repr(e))
-
+# --------------------------------------------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 await update.message.reply_text(
-"Hello! I am your free cloud-hosted AI Agent. Ask me anything!"
+"Hello! 👋\n\n"
+"I'm your AI bot. Send me a message and I'll reply."
 )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-user_text = update.message.text
+if not update.message or not update.message.text:
+return
 
+```
+user_message = update.message.text
+
+if model is None:
+    await update.message.reply_text(
+        "The Gemini API key is not configured on the server."
+    )
+    return
 
 try:
-    response = model.generate_content(user_text)
+    response = model.generate_content(user_message)
 
-    if response.text:
+    if response and response.text:
         await update.message.reply_text(response.text)
     else:
         await update.message.reply_text(
-            "I couldn't generate a response."
+            "Sorry, I couldn't generate a response."
         )
-except Exception as e:
-    print("Gemini error:", repr(e))
-    await update.message.reply_text(
-        "Sorry, I encountered an error while processing your message."
-    )
 
+except Exception as e:
+    print("Gemini error:", e)
+    await update.message.reply_text(
+        "Sorry, something went wrong while contacting the AI."
+    )
+```
+
+# --------------------------------------------------
+
+# Start bot
+
+# --------------------------------------------------
 
 def main():
+if not TELEGRAM_BOT_TOKEN:
+print("ERROR: TELEGRAM_BOT_TOKEN is not set.")
+return
+
+```
+if not GEMINI_API_KEY:
+    print("WARNING: GEMINI_API_KEY is not set.")
+
+# Start Flask in the background so Render detects the web service port.
+flask_thread = threading.Thread(target=run_flask, daemon=True)
+flask_thread.start()
+
 print("Bot is starting...")
-test_telegram_connection()
 
+application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
-threading.Thread(
-    target=run_flask,
-    daemon=True
-).start()
-
-token = os.environ.get("TELEGRAM_TOKEN", "")
-
-if not token:
-    print("ERROR: TELEGRAM_TOKEN is missing.")
-    return
-
-application = Application.builder().token(token).build()
-
+application.add_handler(CommandHandler("start", start))
 application.add_handler(
-    CommandHandler("start", start)
+    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
 )
 
-application.add_handler(
-    MessageHandler(
-        filters.TEXT & ~filters.COMMAND,
-        handle_message
-    )
-)
+print("Telegram bot is running...")
 
-print("Telegram bot is starting polling...")
 application.run_polling()
+```
 
-
+if **name** == "**main**":
 main()
