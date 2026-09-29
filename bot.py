@@ -54,17 +54,20 @@ flask_thread = threading.Thread(
 
 flask_thread.start()
 
-
 # =========================
 # Check environment
 # =========================
 
+print("Environment check:")
+print("TELEGRAM_BOT_TOKEN exists:", bool(TELEGRAM_TOKEN))
+print("GEMINI_API_KEY exists:", bool(GEMINI_API_KEY))
+print("PORT:", PORT)
+
 if not TELEGRAM_TOKEN:
-    raise RuntimeError("TELEGRAM_BOT_TOKEN is not set")
+    raise RuntimeError("TELEGRAM_BOT_TOKEN is not available to this process")
 
 if not GEMINI_API_KEY:
-    raise RuntimeError("GEMINI_API_KEY is not set")
-
+    raise RuntimeError("GEMINI_API_KEY is not available to this process")
 
 # =========================
 # Gemini
