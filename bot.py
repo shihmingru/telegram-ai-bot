@@ -20,7 +20,7 @@ from telegram.ext import (
 
 PORT = int(os.environ.get("PORT", "10000"))
 
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 
@@ -59,12 +59,12 @@ flask_thread.start()
 # =========================
 
 print("Environment check:")
-print("TELEGRAM_BOT_TOKEN exists:", bool(TELEGRAM_TOKEN))
+print("TELEGRAM_TOKEN exists:", bool(TELEGRAM_TOKEN))
 print("GEMINI_API_KEY exists:", bool(GEMINI_API_KEY))
 print("PORT:", PORT)
 
 if not TELEGRAM_TOKEN:
-    raise RuntimeError("TELEGRAM_BOT_TOKEN is not available to this process")
+    raise RuntimeError("TELEGRAM_TOKEN is not available to this process")
 
 if not GEMINI_API_KEY:
     raise RuntimeError("GEMINI_API_KEY is not available to this process")
