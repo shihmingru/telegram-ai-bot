@@ -106,9 +106,8 @@ def test_database():
         print("DATABASE ERROR:", error)
         raise
 
-
 test_database()
-
+print("PASSED DATABASE TEST")
 
 # ============================================================
 # Gemini
@@ -333,6 +332,8 @@ def main():
 # ============================================================
 # Entry point
 # ============================================================
+print("ABOUT TO START MAIN")
 
 if __name__ == "__main__":
     main()
+
