@@ -78,7 +78,7 @@ print("Configuring Gemini...")
 genai.configure(api_key=GEMINI_API_KEY)
 
 model = genai.GenerativeModel(
-    "gemini-1.5-flash"
+    "gemini-3.8-flash"
 )
 
 print("Gemini configured successfully.")
