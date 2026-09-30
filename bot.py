@@ -13,18 +13,14 @@ ContextTypes,
 filters,
 )
 
-============================================================
-ENVIRONMENT
-============================================================
+Environment
 
 PORT = int(os.environ.get("PORT", "10000"))
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-============================================================
-FLASK WEB SERVER
-============================================================
+Flask web server
 
 app = Flask(name)
 
@@ -50,9 +46,7 @@ daemon=True,
 
 flask_thread.start()
 
-============================================================
-ENVIRONMENT CHECK
-============================================================
+Environment check
 
 print("Environment check:")
 print("TELEGRAM_TOKEN exists:", bool(TELEGRAM_TOKEN))
@@ -69,9 +63,7 @@ raise RuntimeError(
 "GEMINI_API_KEY is not available to this process"
 )
 
-============================================================
-GEMINI
-============================================================
+Gemini
 
 print("Configuring Gemini...")
 
@@ -85,9 +77,7 @@ print(
 f"Gemini configured successfully using {MODEL_NAME}."
 )
 
-============================================================
-PERSONAL AI INSTRUCTIONS
-============================================================
+Personal AI instructions
 
 SYSTEM_INSTRUCTION = """
 You are a private personal AI companion.
@@ -152,9 +142,7 @@ You are an assistant and companion, not a replacement for
 qualified medical, legal, financial, or other professional help.
 """
 
-============================================================
-TELEGRAM /START
-============================================================
+Telegram /start command
 
 async def start(
 update: Update,
@@ -164,9 +152,7 @@ await update.message.reply_text(
 "Hello. I'm here and ready to help."
 )
 
-============================================================
-TELEGRAM MESSAGE HANDLER
-============================================================
+Telegram message handler
 
 async def handle_message(
 update: Update,
@@ -177,7 +163,6 @@ user_message = update.message.text
 print("Received:", user_message)
 
 try:
-
     interaction = client.interactions.create(
         model=MODEL_NAME,
         input=[
@@ -202,16 +187,13 @@ try:
         )
 
 except Exception as error:
-
     print("Gemini error:", error)
 
     await update.message.reply_text(
         "Sorry, I encountered an error."
     )
 
-============================================================
-TELEGRAM BOT
-============================================================
+Telegram bot
 
 def main():
 
@@ -238,9 +220,7 @@ print("BOT STARTING")
 
 application.run_polling()
 
-============================================================
-ENTRY POINT
-============================================================
+Entry point
 
 if name == "main":
 main()
