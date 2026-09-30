@@ -203,22 +203,89 @@ async def start(
 # ============================================================
 # Telegram message handler
 # ============================================================
-
 async def handle_message(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
 
     user_message = update.message.text
+    user_id = update.effective_user.id
 
     print("Received:", user_message, flush=True)
-    print("Sending request to Gemini...", flush=True)
+
+    # --------------------------------------------------------
+    # Retrieve recent conversation
+    # --------------------------------------------------------
+
+    recent_messages = get_recent_messages(
+        user_id,
+        limit=10,
+    )
+
+    # --------------------------------------------------------
+    # Build conversation context
+    # --------------------------------------------------------
+
+    conversation_text = ""
+
+    for role, content in recent_messages:
+
+        if role == "user":
+            conversation_text += f"User: {content}\n"
+
+        elif role == "assistant":
+            conversation_text += f"Assistant: {content}\n"
+
+    # --------------------------------------------------------
+    # System instruction
+    # --------------------------------------------------------
+
+    system_instruction = """
+You are a calm, kind, compassionate and practical personal AI
+companion.
+
+Your role is to help the user with learning, planning,
+organization, problem solving, creativity, everyday tasks and
+personal growth.
+
+Be warm and supportive without being overly sentimental.
+
+Give clear, practical answers.
+
+When teaching something, prefer step-by-step guidance.
+
+Do not claim to have performed an action unless the application
+actually performed it.
+
+Respect the user's privacy.
+
+You are an assistant, not a replacement for qualified
+professionals in medical, legal or financial matters.
+"""
+
+    # --------------------------------------------------------
+    # Build prompt
+    # --------------------------------------------------------
+
+    prompt = (
+        system_instruction
+        + "\n\nRecent conversation:\n"
+        + conversation_text
+        + "\n\nCurrent user message:\n"
+        + user_message
+    )
+
+    # --------------------------------------------------------
+    # Ask Gemini
+    # --------------------------------------------------------
 
     try:
 
+        print("Sending request to Gemini...", flush=True)
+
         response = gemini_client.models.generate_content(
             model="gemini-3.8-flash",
-            contents=user_message,
+            contents=prompt,
         )
 
         print("Gemini response received.", flush=True)
@@ -228,7 +295,25 @@ async def handle_message(
         if not reply:
             reply = "I couldn't generate a response right now."
 
-        print("Sending Telegram reply...", flush=True)
+        # ----------------------------------------------------
+        # Save conversation
+        # ----------------------------------------------------
+
+        save_message(
+            user_id,
+            "user",
+            user_message,
+        )
+
+        save_message(
+            user_id,
+            "assistant",
+            reply,
+        )
+
+        # ----------------------------------------------------
+        # Send Telegram response
+        # ----------------------------------------------------
 
         await update.message.reply_text(reply)
 
@@ -243,10 +328,10 @@ async def handle_message(
         )
 
         await update.message.reply_text(
-            "I encountered an error while contacting the AI."
+            "Sorry, I encountered an error while processing "
+            "that message."
         )
-
-
+    
 # ============================================================
 # Start Telegram bot
 # ============================================================
