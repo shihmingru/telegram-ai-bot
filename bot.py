@@ -13,14 +13,10 @@ ContextTypes,
 filters,
 )
 
-Environment
-
 PORT = int(os.environ.get("PORT", "10000"))
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-
-Flask web server
 
 app = Flask(name)
 
@@ -46,8 +42,6 @@ daemon=True,
 
 flask_thread.start()
 
-Environment check
-
 print("Environment check:")
 print("TELEGRAM_TOKEN exists:", bool(TELEGRAM_TOKEN))
 print("GEMINI_API_KEY exists:", bool(GEMINI_API_KEY))
@@ -63,8 +57,6 @@ raise RuntimeError(
 "GEMINI_API_KEY is not available to this process"
 )
 
-Gemini
-
 print("Configuring Gemini...")
 
 client = genai.Client(
@@ -76,8 +68,6 @@ MODEL_NAME = "gemini-3.8-flash"
 print(
 f"Gemini configured successfully using {MODEL_NAME}."
 )
-
-Personal AI instructions
 
 SYSTEM_INSTRUCTION = """
 You are a private personal AI companion.
@@ -142,8 +132,6 @@ You are an assistant and companion, not a replacement for
 qualified medical, legal, financial, or other professional help.
 """
 
-Telegram /start command
-
 async def start(
 update: Update,
 context: ContextTypes.DEFAULT_TYPE,
@@ -151,8 +139,6 @@ context: ContextTypes.DEFAULT_TYPE,
 await update.message.reply_text(
 "Hello. I'm here and ready to help."
 )
-
-Telegram message handler
 
 async def handle_message(
 update: Update,
@@ -193,7 +179,6 @@ except Exception as error:
         "Sorry, I encountered an error."
     )
 
-Telegram bot
 
 def main():
 
@@ -220,7 +205,6 @@ print("BOT STARTING")
 
 application.run_polling()
 
-Entry point
 
 if name == "main":
 main()
