@@ -203,7 +203,7 @@ async def start(
 # ============================================================
 # Telegram message handler
 # ============================================================
-async def handle_message(
+    async def handle_message(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
@@ -240,7 +240,7 @@ async def handle_message(
     # System instruction
     # --------------------------------------------------------
 
-system_instruction = """
+    system_instruction = """
 You are a calm, kind, compassionate and practical personal AI
 companion.
 
@@ -357,7 +357,6 @@ Do not assume that information from another user is available.
             "Sorry, I encountered an error while processing "
             "that message."
         )
-    
 # ============================================================
 # Start Telegram bot
 # ============================================================
