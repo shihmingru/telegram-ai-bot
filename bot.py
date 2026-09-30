@@ -203,43 +203,38 @@ async def start(
 # ============================================================
 # Telegram message handler
 # ============================================================
-    async def handle_message(
+   async def handle_message(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
-
     user_message = update.message.text
     user_id = update.effective_user.id
 
-    print("Received:", user_message, flush=True)
+    print("Received:", user_message)
 
-    # --------------------------------------------------------
+    # Save user's message
+    save_message(
+        user_id,
+        "user",
+        user_message,
+    )
+
     # Retrieve recent conversation
-    # --------------------------------------------------------
-
     recent_messages = get_recent_messages(
         user_id,
         limit=10,
     )
 
-    # --------------------------------------------------------
     # Build conversation context
-    # --------------------------------------------------------
-
     conversation_text = ""
 
     for role, content in recent_messages:
-
         if role == "user":
             conversation_text += f"User: {content}\n"
-
         elif role == "assistant":
             conversation_text += f"Assistant: {content}\n"
 
-    # --------------------------------------------------------
     # System instruction
-    # --------------------------------------------------------
-
     system_instruction = """
 You are a calm, kind, compassionate and practical personal AI
 companion.
@@ -261,37 +256,7 @@ Respect the user's privacy.
 
 You are an assistant, not a replacement for qualified
 professionals in medical, legal or financial matters.
-
-IMPORTANT MEMORY INSTRUCTIONS:
-
-This application has a persistent memory system backed by a
-database.
-
-The section labeled "Recent conversation" below is retrieved
-from that persistent database. It may contain messages from
-previous conversations or previous sessions.
-
-When the user asks whether you remember something, inspect the
-provided conversation history before answering.
-
-Do not incorrectly claim that your memory is limited to the
-current active session.
-
-If information is present in the provided conversation history,
-you may say that you remember it.
-
-If the requested information is not present in the provided
-history, say that you don't currently have that information
-available rather than inventing it.
-
-The database memory belongs to this user's account/identity
-represented by the user ID supplied by the application.
-Do not assume that information from another user is available.
 """
-
-    # --------------------------------------------------------
-    # Build prompt
-    # --------------------------------------------------------
 
     prompt = (
         system_instruction
@@ -301,62 +266,39 @@ Do not assume that information from another user is available.
         + user_message
     )
 
-    # --------------------------------------------------------
     # Ask Gemini
-    # --------------------------------------------------------
-
     try:
-
-        print("Sending request to Gemini...", flush=True)
+        print("Sending request to Gemini...")
 
         response = gemini_client.models.generate_content(
             model="gemini-3.8-flash",
             contents=prompt,
         )
 
-        print("Gemini response received.", flush=True)
-
         reply = response.text
 
         if not reply:
             reply = "I couldn't generate a response right now."
 
-        # ----------------------------------------------------
-        # Save conversation
-        # ----------------------------------------------------
+        print("Gemini response received.")
 
-        save_message(
-            user_id,
-            "user",
-            user_message,
-        )
-
+        # Save assistant response
         save_message(
             user_id,
             "assistant",
             reply,
         )
 
-        # ----------------------------------------------------
-        # Send Telegram response
-        # ----------------------------------------------------
-
         await update.message.reply_text(reply)
 
-        print("Telegram reply sent.", flush=True)
-
     except Exception as error:
-
-        print(
-            "GEMINI ERROR:",
-            repr(error),
-            flush=True,
-        )
+        print("GEMINI ERROR:", repr(error))
 
         await update.message.reply_text(
             "Sorry, I encountered an error while processing "
             "that message."
         )
+
 # ============================================================
 # Start Telegram bot
 # ============================================================
