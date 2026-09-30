@@ -131,7 +131,6 @@ def save_message(user_id, role, content):
     try:
         with psycopg.connect(DATABASE_URL) as connection:
             with connection.cursor() as cursor:
-
                 cursor.execute(
                     """
                     INSERT INTO conversations
@@ -159,7 +158,6 @@ def get_recent_messages(user_id, limit=10):
     try:
         with psycopg.connect(DATABASE_URL) as connection:
             with connection.cursor() as cursor:
-
                 cursor.execute(
                     """
                     SELECT role, content
@@ -193,7 +191,6 @@ async def start(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
-
     await update.message.reply_text(
         "Hello! I'm online and ready. "
         "I'm also connected to your private memory system."
@@ -203,7 +200,8 @@ async def start(
 # ============================================================
 # Telegram message handler
 # ============================================================
-   async def handle_message(
+
+async def handle_message(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
@@ -299,12 +297,12 @@ professionals in medical, legal or financial matters.
             "that message."
         )
 
+
 # ============================================================
 # Start Telegram bot
 # ============================================================
 
 def main():
-
     print("Creating Telegram application...")
 
     application = (
