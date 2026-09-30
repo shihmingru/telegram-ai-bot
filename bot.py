@@ -300,6 +300,8 @@ professionals in medical, legal or financial matters.
 # ============================================================
 # Start Telegram bot
 # ============================================================
+async def error_handler(update, context):
+    print("TELEGRAM ERROR:", repr(context.error))
 
 def main():
     print("Creating Telegram application...")
@@ -309,6 +311,8 @@ def main():
         .token(TELEGRAM_TOKEN)
         .build()
     )
+
+    application.add_error_handler(error_handler)
 
     application.add_handler(
         CommandHandler(
