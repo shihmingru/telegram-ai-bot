@@ -328,13 +328,18 @@ def main():
         )
     )
 
-    print("BOT STARTING")
-    print("Starting Telegram polling...")
-    print("=== TELEGRAM BOT STARTING ===", flush=True)
-    print("=== TELEGRAM BOT STOPPED ===", flush=True)
+print("BOT STARTING", flush=True)
+print("Starting Telegram polling...", flush=True)
 
-    application.run_polling()
-
+try:
+    application.run_polling(
+        drop_pending_updates=True
+    )
+except Exception as error:
+    print("TELEGRAM POLLING CRASHED:", repr(error), flush=True)
+    raise
+finally:
+    print("=== TELEGRAM POLLING EXITED ===", flush=True)
 
 # ============================================================
 # Entry point
