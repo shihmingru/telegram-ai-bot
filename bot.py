@@ -329,6 +329,7 @@ def main():
     )
 
     print("BOT STARTING")
+    print("Starting Telegram polling...")
 
     application.run_polling()
 
