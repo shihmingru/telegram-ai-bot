@@ -210,119 +210,40 @@ async def handle_message(
 ):
 
     user_message = update.message.text
-    user_id = update.effective_user.id
 
-    print("Received:", user_message)
-
-    # --------------------------------------------------------
-    # Save user's message
-    # --------------------------------------------------------
-
-    save_message(
-        user_id,
-        "user",
-        user_message,
-    )
-
-    # --------------------------------------------------------
-    # Retrieve recent conversation
-    # --------------------------------------------------------
-
-    recent_messages = get_recent_messages(
-        user_id,
-        limit=10,
-    )
-
-    # --------------------------------------------------------
-    # Build conversation context
-    # --------------------------------------------------------
-
-    conversation_text = ""
-
-    for role, content in recent_messages:
-
-        if role == "user":
-            conversation_text += (
-                f"User: {content}\n"
-            )
-
-        elif role == "assistant":
-            conversation_text += (
-                f"Assistant: {content}\n"
-            )
-
-    # --------------------------------------------------------
-    # System instruction
-    # --------------------------------------------------------
-
-    system_instruction = """
-You are a calm, kind, compassionate and practical personal AI
-companion.
-
-Your role is to help the user with learning, planning,
-organization, problem solving, creativity, everyday tasks and
-personal growth.
-
-Be warm and supportive without being overly sentimental.
-
-Give clear, practical answers.
-
-When teaching something, prefer step-by-step guidance.
-
-Do not claim to have performed an action unless the application
-actually performed it.
-
-Respect the user's privacy.
-
-You are an assistant, not a replacement for qualified
-professionals in medical, legal or financial matters.
-"""
-
-    prompt = (
-        system_instruction
-        + "\n\nRecent conversation:\n"
-        + conversation_text
-        + "\n\nCurrent user message:\n"
-        + user_message
-    )
-
-    # --------------------------------------------------------
-    # Ask Gemini
-    # --------------------------------------------------------
+    print("Received:", user_message, flush=True)
+    print("Sending request to Gemini...", flush=True)
 
     try:
 
         response = gemini_client.models.generate_content(
             model="gemini-2.5-flash",
-            contents=prompt,
+            contents=user_message,
         )
+
+        print("Gemini response received.", flush=True)
 
         reply = response.text
 
         if not reply:
-            reply = (
-                "I couldn't generate a response right now."
-            )
+            reply = "I couldn't generate a response right now."
 
-        # ----------------------------------------------------
-        # Save assistant response
-        # ----------------------------------------------------
-
-        save_message(
-            user_id,
-            "assistant",
-            reply,
-        )
+        print("Sending Telegram reply...", flush=True)
 
         await update.message.reply_text(reply)
 
+        print("Telegram reply sent.", flush=True)
+
     except Exception as error:
 
-        print("Gemini error:", error)
+        print(
+            "GEMINI ERROR:",
+            repr(error),
+            flush=True,
+        )
 
         await update.message.reply_text(
-            "Sorry, I encountered an error while processing "
-            "that message."
+            "I encountered an error while contacting the AI."
         )
 
 
