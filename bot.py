@@ -330,6 +330,8 @@ def main():
 
     print("BOT STARTING")
     print("Starting Telegram polling...")
+    print("=== TELEGRAM BOT STARTING ===", flush=True)
+    print("=== TELEGRAM BOT STOPPED ===", flush=True)
 
     application.run_polling()
 
