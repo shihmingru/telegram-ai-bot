@@ -106,8 +106,10 @@ def test_database():
         print("DATABASE ERROR:", error)
         raise
 
+
 test_database()
 print("PASSED DATABASE TEST")
+
 
 # ============================================================
 # Gemini
@@ -300,8 +302,10 @@ professionals in medical, legal or financial matters.
 # ============================================================
 # Start Telegram bot
 # ============================================================
+
 async def error_handler(update, context):
     print("TELEGRAM ERROR:", repr(context.error))
+
 
 def main():
     print("Creating Telegram application...")
@@ -328,24 +332,25 @@ def main():
         )
     )
 
-print("BOT STARTING", flush=True)
-print("Starting Telegram polling...", flush=True)
+    print("BOT STARTING", flush=True)
+    print("Starting Telegram polling...", flush=True)
 
-try:
-    application.run_polling(
-        drop_pending_updates=True
-    )
-except Exception as error:
-    print("TELEGRAM POLLING CRASHED:", repr(error), flush=True)
-    raise
-finally:
-    print("=== TELEGRAM POLLING EXITED ===", flush=True)
+    try:
+        application.run_polling(
+            drop_pending_updates=True
+        )
+    except Exception as error:
+        print("TELEGRAM POLLING CRASHED:", repr(error), flush=True)
+        raise
+    finally:
+        print("=== TELEGRAM POLLING EXITED ===", flush=True)
+
 
 # ============================================================
 # Entry point
 # ============================================================
+
 print("ABOUT TO START MAIN")
 
 if __name__ == "__main__":
     main()
-
