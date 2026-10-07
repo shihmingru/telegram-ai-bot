@@ -318,10 +318,45 @@ professionals in medical, legal or financial matters.
 
         print("Sending request to Gemini...", flush=True)
 
-        response = gemini_client.models.generate_content(
-            model="gemini-3.8-flash",
-            contents=prompt,
-        )
+        # Gemini can temporarily return 503 when the model is under
+        # unusually high demand. Retry transient failures automatically.
+        response = None
+        last_error = None
+
+        for attempt, delay in enumerate([0, 3, 7, 15], start=1):
+            try:
+                if delay:
+                    print(
+                        "Gemini retry " + str(attempt) + "/4 after " + str(delay) + "s...",
+                        flush=True,
+                    )
+                    import time
+                    time.sleep(delay)
+
+                response = gemini_client.models.generate_content(
+                    model="gemini-3.8-flash",
+                    contents=prompt,
+                )
+                break
+
+            except Exception as error:
+                last_error = error
+                error_text = repr(error)
+
+                print(
+                    "Gemini attempt " + str(attempt) + "/4 failed: " + error_text,
+                    flush=True,
+                )
+
+                # Retry only transient service-overload/unavailability errors.
+                if "503" not in error_text and "UNAVAILABLE" not in error_text:
+                    raise
+
+        if response is None:
+            raise RuntimeError(
+                "Gemini remained unavailable after 4 attempts: "
+                + repr(last_error)
+            )
 
         reply = response.text
 
