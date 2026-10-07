@@ -1,5 +1,7 @@
 import os
 import threading
+import time
+import requests
 
 from flask import Flask
 import psycopg
@@ -56,6 +58,49 @@ flask_thread = threading.Thread(
 )
 
 flask_thread.start()
+
+
+# ============================================================
+# Keep free Render service awake
+# ============================================================
+
+RENDER_URL = os.environ.get(
+    "RENDER_EXTERNAL_URL",
+    "https://telegram-ai-bot-57fa.onrender.com",
+)
+KEEP_ALIVE_INTERVAL = 5 * 60
+
+
+def keep_render_awake():
+    print("Render keep-alive started.", flush=True)
+
+    while True:
+        time.sleep(KEEP_ALIVE_INTERVAL)
+
+        try:
+            response = requests.get(
+                RENDER_URL,
+                timeout=30,
+            )
+            print(
+                "Render keep-alive ping:",
+                response.status_code,
+                flush=True,
+            )
+        except Exception as error:
+            print(
+                "Render keep-alive error:",
+                repr(error),
+                flush=True,
+            )
+
+
+keep_alive_thread = threading.Thread(
+    target=keep_render_awake,
+    daemon=True,
+)
+
+keep_alive_thread.start()
 
 
 # ============================================================
