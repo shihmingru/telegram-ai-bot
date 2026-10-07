@@ -302,6 +302,26 @@ def configure_webhook():
             flush=True,
         )
 
+        info_response = requests.get(
+            TELEGRAM_API + "/getWebhookInfo",
+            timeout=30,
+        )
+        info_response.raise_for_status()
+        info = info_response.json()
+
+        if info.get("ok"):
+            result = info.get("result", {})
+            print(
+                "Telegram webhook status: "
+                + "url=" + str(result.get("url"))
+                + ", pending_update_count=" + str(result.get("pending_update_count"))
+                + ", last_error_date=" + str(result.get("last_error_date"))
+                + ", last_error_message=" + str(result.get("last_error_message")),
+                flush=True,
+            )
+        else:
+            print("TELEGRAM WEBHOOK INFO ERROR:", repr(info), flush=True)
+
     except Exception as error:
         print(
             "TELEGRAM WEBHOOK ERROR:",
