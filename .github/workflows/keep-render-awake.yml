@@ -1,6 +1,7 @@
 name: Keep Render Bot Awake
 
 on:
+  push:
   schedule:
     - cron: "*/5 * * * *"
   workflow_dispatch:
