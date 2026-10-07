@@ -319,7 +319,7 @@ professionals in medical, legal or financial matters.
         print("Sending request to Gemini...", flush=True)
 
         response = gemini_client.models.generate_content(
-            model="gemini-3.8-flash",
+            model="gemini-2.5-flash",
             contents=prompt,
         )
 
