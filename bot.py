@@ -1,19 +1,10 @@
 import os
+import hashlib
 import threading
-import time
+
 import requests
-
-from flask import Flask
+from flask import Flask, request
 import psycopg
-
-from telegram import Update
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
-)
 
 from google import genai
 
@@ -27,6 +18,10 @@ PORT = int(os.environ.get("PORT", "10000"))
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 DATABASE_URL = os.environ.get("DATABASE_URL")
+RENDER_URL = os.environ.get(
+    "RENDER_EXTERNAL_URL",
+    "https://telegram-ai-bot-57fa.onrender.com",
+)
 
 
 # ============================================================
@@ -41,95 +36,28 @@ def home():
     return "Personal AI Agent is alive!"
 
 
-def run_flask():
-    print(f"Starting Flask server on port {PORT}")
-
-    app.run(
-        host="0.0.0.0",
-        port=PORT,
-        debug=False,
-        use_reloader=False,
-    )
-
-
-flask_thread = threading.Thread(
-    target=run_flask,
-    daemon=True,
-)
-
-flask_thread.start()
-
-
-# ============================================================
-# Keep free Render service awake
-# ============================================================
-
-RENDER_URL = os.environ.get(
-    "RENDER_EXTERNAL_URL",
-    "https://telegram-ai-bot-57fa.onrender.com",
-)
-KEEP_ALIVE_INTERVAL = 5 * 60
-
-
-def keep_render_awake():
-    print("Render keep-alive started.", flush=True)
-
-    while True:
-        time.sleep(KEEP_ALIVE_INTERVAL)
-
-        try:
-            response = requests.get(
-                RENDER_URL,
-                timeout=30,
-            )
-            print(
-                "Render keep-alive ping:",
-                response.status_code,
-                flush=True,
-            )
-        except Exception as error:
-            print(
-                "Render keep-alive error:",
-                repr(error),
-                flush=True,
-            )
-
-
-keep_alive_thread = threading.Thread(
-    target=keep_render_awake,
-    daemon=True,
-)
-
-keep_alive_thread.start()
-
-
 # ============================================================
 # Environment check
 # ============================================================
 
-print("Environment check:")
-print("TELEGRAM_TOKEN exists:", bool(TELEGRAM_TOKEN))
-print("GEMINI_API_KEY exists:", bool(GEMINI_API_KEY))
-print("DATABASE_URL exists:", bool(DATABASE_URL))
-print("PORT:", PORT)
+print("Environment check:", flush=True)
+print("TELEGRAM_TOKEN exists:", bool(TELEGRAM_TOKEN), flush=True)
+print("GEMINI_API_KEY exists:", bool(GEMINI_API_KEY), flush=True)
+print("DATABASE_URL exists:", bool(DATABASE_URL), flush=True)
+print("PORT:", PORT, flush=True)
+print("RENDER_URL:", RENDER_URL, flush=True)
 
 
 if not TELEGRAM_TOKEN:
-    raise RuntimeError(
-        "TELEGRAM_TOKEN is not available to this process"
-    )
+    raise RuntimeError("TELEGRAM_TOKEN is not available to this process")
 
 
 if not GEMINI_API_KEY:
-    raise RuntimeError(
-        "GEMINI_API_KEY is not available to this process"
-    )
+    raise RuntimeError("GEMINI_API_KEY is not available to this process")
 
 
 if not DATABASE_URL:
-    raise RuntimeError(
-        "DATABASE_URL is not available to this process"
-    )
+    raise RuntimeError("DATABASE_URL is not available to this process")
 
 
 # ============================================================
@@ -137,7 +65,7 @@ if not DATABASE_URL:
 # ============================================================
 
 def test_database():
-    print("Testing Supabase PostgreSQL connection...")
+    print("Testing Supabase PostgreSQL connection...", flush=True)
 
     try:
         with psycopg.connect(DATABASE_URL) as connection:
@@ -145,32 +73,32 @@ def test_database():
                 cursor.execute("SELECT 1;")
                 result = cursor.fetchone()
 
-        print("Database connection successful:", result)
+        print("Database connection successful:", result, flush=True)
 
     except Exception as error:
-        print("DATABASE ERROR:", error)
+        print("DATABASE ERROR:", repr(error), flush=True)
         raise
 
 
 test_database()
-print("PASSED DATABASE TEST")
+print("PASSED DATABASE TEST", flush=True)
 
 
 # ============================================================
 # Gemini
 # ============================================================
 
-print("Configuring Gemini...")
+print("Configuring Gemini...", flush=True)
 
 gemini_client = genai.Client(
     api_key=GEMINI_API_KEY
 )
 
-print("Gemini configured successfully.")
+print("Gemini configured successfully.", flush=True)
 
 
 # ============================================================
-# Save conversation
+# Conversation storage
 # ============================================================
 
 def save_message(user_id, role, content):
@@ -193,12 +121,8 @@ def save_message(user_id, role, content):
             connection.commit()
 
     except Exception as error:
-        print("MEMORY SAVE ERROR:", error)
+        print("MEMORY SAVE ERROR:", repr(error), flush=True)
 
-
-# ============================================================
-# Get recent conversation
-# ============================================================
 
 def get_recent_messages(user_id, limit=10):
     try:
@@ -221,65 +145,147 @@ def get_recent_messages(user_id, limit=10):
                 rows = cursor.fetchall()
 
         rows.reverse()
-
         return rows
 
     except Exception as error:
-        print("MEMORY READ ERROR:", error)
+        print("MEMORY READ ERROR:", repr(error), flush=True)
         return []
 
 
 # ============================================================
-# /start command
+# Telegram helpers
 # ============================================================
 
-async def start(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-    await update.message.reply_text(
-        "Hello! I'm online and ready. "
-        "I'm also connected to your private memory system."
-    )
+WEBHOOK_PATH = (
+    "/telegram/"
+    + hashlib.sha256(TELEGRAM_TOKEN.encode()).hexdigest()[:32]
+)
+
+WEBHOOK_URL = RENDER_URL.rstrip("/") + WEBHOOK_PATH
+
+TELEGRAM_API = (
+    "https://api.telegram.org/bot"
+    + TELEGRAM_TOKEN
+)
+
+
+def send_telegram_message(chat_id, text):
+    try:
+        response = requests.post(
+            TELEGRAM_API + "/sendMessage",
+            json={
+                "chat_id": chat_id,
+                "text": text,
+            },
+            timeout=30,
+        )
+
+        response.raise_for_status()
+
+        payload = response.json()
+
+        if not payload.get("ok"):
+            raise RuntimeError(payload)
+
+        print(
+            "Telegram response sent successfully.",
+            flush=True,
+        )
+
+    except Exception as error:
+        print(
+            "TELEGRAM SEND ERROR:",
+            repr(error),
+            flush=True,
+        )
+
+
+def configure_webhook():
+    print("Configuring Telegram webhook...", flush=True)
+
+    try:
+        response = requests.post(
+            TELEGRAM_API + "/setWebhook",
+            json={
+                "url": WEBHOOK_URL,
+                "drop_pending_updates": True,
+            },
+            timeout=30,
+        )
+
+        response.raise_for_status()
+
+        payload = response.json()
+
+        if not payload.get("ok"):
+            raise RuntimeError(payload)
+
+        print(
+            "Telegram webhook configured successfully:",
+            WEBHOOK_URL,
+            flush=True,
+        )
+
+    except Exception as error:
+        print(
+            "TELEGRAM WEBHOOK ERROR:",
+            repr(error),
+            flush=True,
+        )
+        raise
 
 
 # ============================================================
-# Telegram message handler
+# Message processing
 # ============================================================
 
-async def handle_message(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-    user_message = update.message.text
-    user_id = update.effective_user.id
+def process_message(update_data):
+    try:
+        message = update_data.get("message")
 
-    print("Received:", user_message)
+        if not message:
+            return
 
-    # Save user's message
-    save_message(
-        user_id,
-        "user",
-        user_message,
-    )
+        text = message.get("text")
+        chat = message.get("chat")
+        user = message.get("from")
 
-    # Retrieve recent conversation
-    recent_messages = get_recent_messages(
-        user_id,
-        limit=10,
-    )
+        if not text or not chat or not user:
+            return
 
-    # Build conversation context
-    conversation_text = ""
+        chat_id = chat.get("id")
+        user_id = user.get("id")
 
-    for role, content in recent_messages:
-        if role == "user":
-            conversation_text += f"User: {content}\n"
-        elif role == "assistant":
-            conversation_text += f"Assistant: {content}\n"
+        print("Received:", text, flush=True)
 
-    # System instruction
-    system_instruction = """
+        if text.startswith("/start"):
+            send_telegram_message(
+                chat_id,
+                "Hello! I'm online and ready. "
+                "I'm also connected to your private memory system.",
+            )
+            return
+
+        save_message(
+            user_id,
+            "user",
+            text,
+        )
+
+        recent_messages = get_recent_messages(
+            user_id,
+            limit=10,
+        )
+
+        conversation_text = ""
+
+        for role, content in recent_messages:
+            if role == "user":
+                conversation_text += f"User: {content}\n"
+            elif role == "assistant":
+                conversation_text += f"Assistant: {content}\n"
+
+        system_instruction = """
 You are a calm, kind, compassionate and practical personal AI
 companion.
 
@@ -302,17 +308,15 @@ You are an assistant, not a replacement for qualified
 professionals in medical, legal or financial matters.
 """
 
-    prompt = (
-        system_instruction
-        + "\n\nRecent conversation:\n"
-        + conversation_text
-        + "\n\nCurrent user message:\n"
-        + user_message
-    )
+        prompt = (
+            system_instruction
+            + "\n\nRecent conversation:\n"
+            + conversation_text
+            + "\n\nCurrent user message:\n"
+            + text
+        )
 
-    # Ask Gemini
-    try:
-        print("Sending request to Gemini...")
+        print("Sending request to Gemini...", flush=True)
 
         response = gemini_client.models.generate_content(
             model="gemini-3.8-flash",
@@ -324,78 +328,81 @@ professionals in medical, legal or financial matters.
         if not reply:
             reply = "I couldn't generate a response right now."
 
-        print("Gemini response received.")
+        print("Gemini response received.", flush=True)
 
-        # Save assistant response
         save_message(
             user_id,
             "assistant",
             reply,
         )
 
-        await update.message.reply_text(reply)
+        send_telegram_message(
+            chat_id,
+            reply,
+        )
 
     except Exception as error:
-        print("GEMINI ERROR:", repr(error))
-
-        await update.message.reply_text(
-            "Sorry, I encountered an error while processing "
-            "that message."
+        print(
+            "MESSAGE PROCESSING ERROR:",
+            repr(error),
+            flush=True,
         )
 
+        chat_id = (
+            update_data.get("message", {})
+            .get("chat", {})
+            .get("id")
+        )
+
+        if chat_id:
+            send_telegram_message(
+                chat_id,
+                "Sorry, I encountered an error while processing "
+                "that message.",
+            )
+
 
 # ============================================================
-# Start Telegram bot
+# Telegram webhook endpoint
 # ============================================================
 
-async def error_handler(update, context):
-    print("TELEGRAM ERROR:", repr(context.error))
+@app.route(WEBHOOK_PATH, methods=["POST"])
+def telegram_webhook():
+    update_data = request.get_json(silent=True) or {}
 
-
-def main():
-    print("Creating Telegram application...")
-
-    application = (
-        Application.builder()
-        .token(TELEGRAM_TOKEN)
-        .build()
+    print(
+        "Telegram webhook received.",
+        flush=True,
     )
 
-    application.add_error_handler(error_handler)
-
-    application.add_handler(
-        CommandHandler(
-            "start",
-            start,
-        )
+    worker = threading.Thread(
+        target=process_message,
+        args=(update_data,),
+        daemon=True,
     )
 
-    application.add_handler(
-        MessageHandler(
-            filters.TEXT & ~filters.COMMAND,
-            handle_message,
-        )
-    )
+    worker.start()
 
-    print("BOT STARTING", flush=True)
-    print("Starting Telegram polling...", flush=True)
-
-    try:
-        application.run_polling(
-            drop_pending_updates=True
-        )
-    except Exception as error:
-        print("TELEGRAM POLLING CRASHED:", repr(error), flush=True)
-        raise
-    finally:
-        print("=== TELEGRAM POLLING EXITED ===", flush=True)
+    return "OK", 200
 
 
 # ============================================================
-# Entry point
+# Start
 # ============================================================
 
-print("ABOUT TO START MAIN")
+print("BOT STARTING", flush=True)
 
-if __name__ == "__main__":
-    main()
+configure_webhook()
+
+print(
+    "Starting Flask server on port",
+    PORT,
+    flush=True,
+)
+
+app.run(
+    host="0.0.0.0",
+    port=PORT,
+    debug=False,
+    use_reloader=False,
+)
