@@ -97,6 +97,80 @@ gemini_client = genai.Client(
 print("Gemini configured successfully.", flush=True)
 
 
+# Discover models actually available to this API key.
+# This avoids hard-coding a model that may be temporarily unavailable
+# or unavailable to this particular account.
+def discover_gemini_models():
+    try:
+        available = []
+
+        for model in gemini_client.models.list():
+            name = getattr(model, "name", "") or ""
+            if name.startswith("models/"):
+                name = name[len("models/"):]
+
+            if not name:
+                continue
+
+            actions = getattr(model, "supported_actions", None)
+            if actions and "generateContent" not in actions:
+                continue
+
+            available.append(name)
+
+        available = list(dict.fromkeys(available))
+
+        print(
+            "Gemini models available to this API key:",
+            ", ".join(available),
+            flush=True,
+        )
+
+        preferred = [
+            "gemini-3.8-flash",
+            "gemini-3.8-flash-lite",
+            "gemini-3.7-flash",
+            "gemini-3.1-flash-lite",
+            "gemini-3-flash",
+            "gemini-2.5-flash-lite",
+            "gemini-2.0-flash",
+        ]
+
+        ordered = []
+
+        for name in preferred:
+            if name in available and name not in ordered:
+                ordered.append(name)
+
+        for name in available:
+            if "flash" in name.lower() and name not in ordered:
+                ordered.append(name)
+
+        for name in available:
+            if name not in ordered:
+                ordered.append(name)
+
+        if ordered:
+            print(
+                "Gemini model fallback order:",
+                " -> ".join(ordered),
+                flush=True,
+            )
+            return ordered
+
+    except Exception as error:
+        print(
+            "GEMINI MODEL DISCOVERY ERROR:",
+            repr(error),
+            flush=True,
+        )
+
+    return ["gemini-3.8-flash"]
+
+
+GEMINI_MODELS = discover_gemini_models()
+
+
 # ============================================================
 # Conversation storage
 # ============================================================
@@ -318,24 +392,26 @@ professionals in medical, legal or financial matters.
 
         print("Sending request to Gemini...", flush=True)
 
-        # Gemini can temporarily return 503 when the model is under
-        # unusually high demand. Retry transient failures automatically.
         response = None
         last_error = None
 
-        for attempt, delay in enumerate([0, 3, 7, 15], start=1):
+        # Try the best available Flash model first. If Gemini returns a
+        # transient 503, move to another model available to this API key.
+        for model_name in GEMINI_MODELS:
             try:
-                if delay:
-                    print(
-                        "Gemini retry " + str(attempt) + "/4 after " + str(delay) + "s...",
-                        flush=True,
-                    )
-                    import time
-                    time.sleep(delay)
+                print(
+                    "Trying Gemini model: " + model_name,
+                    flush=True,
+                )
 
                 response = gemini_client.models.generate_content(
-                    model="gemini-3.8-flash",
+                    model=model_name,
                     contents=prompt,
+                )
+
+                print(
+                    "Gemini response received from " + model_name + ".",
+                    flush=True,
                 )
                 break
 
@@ -344,17 +420,16 @@ professionals in medical, legal or financial matters.
                 error_text = repr(error)
 
                 print(
-                    "Gemini attempt " + str(attempt) + "/4 failed: " + error_text,
+                    "Gemini model " + model_name + " failed: " + error_text,
                     flush=True,
                 )
 
-                # Retry only transient service-overload/unavailability errors.
                 if "503" not in error_text and "UNAVAILABLE" not in error_text:
                     raise
 
         if response is None:
             raise RuntimeError(
-                "Gemini remained unavailable after 4 attempts: "
+                "All discovered Gemini models were unavailable: "
                 + repr(last_error)
             )
 
