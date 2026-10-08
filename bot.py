@@ -249,7 +249,7 @@ def free_web_search(query, max_results=5):
             # Google uses /url?q=... redirects in some HTML responses.
             if not candidate_results and provider == "Google":
                 matches = re.findall(
-                    r'<a[^>]+href="/url\\?q=([^"&]+)[^"]*"[^>]*>(.*?)</a>',
+                    r'<a[^>]+href="/url\?q=([^"&]+)[^"]*"[^>]*>(.*?)</a>',
                     response.text,
                     flags=re.IGNORECASE | re.DOTALL,
                 )
@@ -290,33 +290,33 @@ def free_web_search(query, max_results=5):
         return []
 
 
-        # Fetch a small amount of page text so answers can use the actual
-        # page content rather than relying only on search-engine snippets.
-        enriched = []
-        for item in results[:3]:
-            try:
-                page = requests.get(
-                    item["url"],
-                    headers=headers,
-                    timeout=8,
-                    allow_redirects=True,
-                )
-                content_type = page.headers.get("content-type", "").lower()
-                if page.ok and "text/html" in content_type:
-                    page_text = _clean_html_text(page.text)
-                    item["page_text"] = page_text[:7000]
-                else:
-                    item["page_text"] = ""
-            except Exception as error:
-                print(
-                    "Web page fetch failed for " + item["url"] + ": "
-                    + repr(error),
-                    flush=True,
-                )
+    # Fetch a small amount of page text so answers can use the actual
+    # page content rather than relying only on search-engine snippets.
+    enriched = []
+    for item in results[:3]:
+        try:
+            page = requests.get(
+                item["url"],
+                headers=headers,
+                timeout=8,
+                allow_redirects=True,
+            )
+            content_type = page.headers.get("content-type", "").lower()
+            if page.ok and "text/html" in content_type:
+                page_text = _clean_html_text(page.text)
+                item["page_text"] = page_text[:7000]
+            else:
                 item["page_text"] = ""
-            enriched.append(item)
+        except Exception as error:
+            print(
+                "Web page fetch failed for " + item["url"] + ": "
+                + repr(error),
+                flush=True,
+            )
+            item["page_text"] = ""
+        enriched.append(item)
 
-        return enriched
+    return enriched
 
 
 def query_requires_web(text):
