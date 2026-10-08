@@ -627,6 +627,268 @@ def configure_webhook():
         raise
 
 
+def build_agent_tools():
+    """Tool declarations for Gemini's agent loop."""
+    return [
+        types.Tool(
+            function_declarations=[
+                types.FunctionDeclaration(
+                    name="web_search",
+                    description=(
+                        "Search the public web for current or hard-to-find information. "
+                        "Use this when the user asks for current information, official sources, "
+                        "news, prices, requirements, people, places, or information you do not "
+                        "reliably know. Returns URLs and retrieved page text when available."
+                    ),
+                    parameters={
+                        "type": "OBJECT",
+                        "properties": {
+                            "query": {
+                                "type": "STRING",
+                                "description": "The web search query."
+                            }
+                        },
+                        "required": ["query"],
+                    },
+                ),
+                types.FunctionDeclaration(
+                    name="web_open",
+                    description=(
+                        "Open a specific public HTTP or HTTPS webpage and read its text and links. "
+                        "Use this for official pages or when you already know a useful URL."
+                    ),
+                    parameters={
+                        "type": "OBJECT",
+                        "properties": {
+                            "url": {
+                                "type": "STRING",
+                                "description": "The full HTTP or HTTPS URL to open."
+                            }
+                        },
+                        "required": ["url"],
+                    },
+                ),
+                types.FunctionDeclaration(
+                    name="web_crawl",
+                    description=(
+                        "Crawl a public website from a starting URL, following relevant same-site "
+                        "links. Use this when answering requires finding information across several "
+                        "pages, such as a university people directory and individual faculty profiles."
+                    ),
+                    parameters={
+                        "type": "OBJECT",
+                        "properties": {
+                            "start_url": {
+                                "type": "STRING",
+                                "description": "The starting HTTP or HTTPS URL."
+                            },
+                            "max_pages": {
+                                "type": "INTEGER",
+                                "description": "Maximum number of pages to read, from 1 to 8."
+                            }
+                        },
+                        "required": ["start_url"],
+                    },
+                ),
+            ]
+        )
+    ]
+
+
+def execute_agent_tool(name, args):
+    """Execute one agent-selected tool and return JSON-safe data."""
+    if name == "web_search":
+        query = str(args.get("query", "")).strip()
+        if not query:
+            return {"error": "A search query is required."}
+
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+            ),
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+
+        results = free_web_search(query, max_results=5)
+
+        # Direct official university sources are a useful fallback when
+        # search engines block cloud-hosted requests.
+        official = _fetch_official_academic_sources(
+            query,
+            headers,
+            max_results=5,
+        )
+
+        merged = []
+        seen = set()
+        for item in official + results:
+            url = item.get("url")
+            if url and url not in seen:
+                seen.add(url)
+                merged.append(item)
+
+        return {
+            "query": query,
+            "results": merged[:8],
+            "note": (
+                "These are live retrieval results from this application. "
+                "If the list is empty, the search could not retrieve sources."
+            ),
+        }
+
+    if name == "web_open":
+        url = str(args.get("url", "")).strip()
+        if not url.startswith(("http://", "https://")):
+            return {"error": "Only HTTP and HTTPS URLs are supported."}
+
+        page = web_open(url, max_chars=12000)
+        return {
+            "url": page.get("url", url),
+            "text": page.get("text", ""),
+            "links": page.get("links", [])[:80],
+        }
+
+    if name == "web_crawl":
+        start_url = str(args.get("start_url", "")).strip()
+        if not start_url.startswith(("http://", "https://")):
+            return {"error": "Only HTTP and HTTPS URLs are supported."}
+
+        try:
+            max_pages = int(args.get("max_pages", 5))
+        except (TypeError, ValueError):
+            max_pages = 5
+        max_pages = max(1, min(max_pages, 8))
+
+        pages = web_crawl(start_url, max_pages=max_pages)
+        return {
+            "start_url": start_url,
+            "pages": pages,
+            "pages_read": len(pages),
+        }
+
+    return {"error": "Unknown tool: " + name}
+
+
+def run_agent(prompt):
+    """Run a bounded Gemini tool-calling loop."""
+    system_instruction = """
+You are a calm, kind, compassionate and practical personal AI companion.
+
+You are an actual tool-using agent. You have live web tools available.
+Choose tools when they are useful. Do not claim that you searched,
+opened, or crawled a webpage unless a tool actually returned it.
+
+Use web_search for current information, official sources, news, prices,
+requirements, people, places, or information that needs verification.
+Use web_open when you have a specific useful URL.
+Use web_crawl when information must be gathered across several pages
+of one website.
+
+For current or externally verifiable claims, retrieve live sources
+before answering when practical. Prefer official and primary sources.
+When sources are retrieved, base factual claims on them and include
+the relevant URLs.
+
+If a tool fails or returns no sources, say that clearly. Never invent
+search results, page contents, citations, URLs, or facts.
+
+You can answer normally when web tools are unnecessary. You may use
+multiple tool calls when needed, but stop when you have enough evidence.
+"""
+
+    tools = build_agent_tools()
+    contents = [prompt]
+
+    for step in range(6):
+        print("Agent reasoning/tool step:", step + 1, flush=True)
+
+        response = None
+        last_error = None
+
+        for model_name in GEMINI_MODELS:
+            try:
+                print("Trying Gemini agent model: " + model_name, flush=True)
+                response = gemini_client.models.generate_content(
+                    model=model_name,
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_instruction,
+                        tools=tools,
+                    ),
+                )
+                print(
+                    "Gemini agent response received from "
+                    + model_name + ".",
+                    flush=True,
+                )
+                break
+            except Exception as error:
+                last_error = error
+                print(
+                    "Gemini agent model "
+                    + model_name
+                    + " failed: "
+                    + repr(error),
+                    flush=True,
+                )
+
+        if response is None:
+            raise RuntimeError(
+                "All discovered Gemini models were unavailable: "
+                + repr(last_error)
+            )
+
+        function_calls = getattr(response, "function_calls", None) or []
+
+        if not function_calls:
+            return response.text or "I couldn't generate a response right now."
+
+        # Preserve the model's function-call turn before sending tool results.
+        if response.candidates and response.candidates[0].content:
+            contents.append(response.candidates[0].content)
+
+        for function_call in function_calls:
+            name = getattr(function_call, "name", "") or ""
+            args = getattr(function_call, "args", {}) or {}
+            print(
+                "Agent selected tool: "
+                + name
+                + " args="
+                + repr(args),
+                flush=True,
+            )
+
+            try:
+                result = execute_agent_tool(name, dict(args))
+            except Exception as error:
+                result = {
+                    "error": "Tool execution failed: " + repr(error)
+                }
+                print(
+                    "Agent tool execution failed: "
+                    + repr(error),
+                    flush=True,
+                )
+
+            contents.append(
+                types.Content(
+                    role="user",
+                    parts=[
+                        types.Part.from_function_response(
+                            name=name,
+                            response={"result": result},
+                        )
+                    ],
+                )
+            )
+
+    return (
+        "I reached the tool-use limit before completing the request. "
+        "I won't pretend that I completed research I could not finish."
+    )
+
+
 def process_message(update_data):
     try:
         message = update_data.get("message")
@@ -657,95 +919,20 @@ def process_message(update_data):
         conversation_text = ""
         for role, content in recent_messages:
             if role == "user":
-                conversation_text += f"User: {content}\n"
+                conversation_text += f"User: {content}\\n"
             elif role == "assistant":
-                conversation_text += f"Assistant: {content}\n"
-
-        web_required = query_requires_web(text)
-        web_results = free_web_search(text) if web_required else []
-
-        if web_required and not web_results:
-            reply = (
-                "I couldn't complete a live web search for that request right now. "
-                "I won't pretend that I searched. Please try again in a moment."
-            )
-            save_message(user_id, "assistant", reply)
-            send_telegram_message(chat_id, reply)
-            return
-
-        system_instruction = """
-You are a calm, kind, compassionate and practical personal AI
-companion.
-
-Your role is to help the user with learning, planning, organization,
-problem solving, creativity, everyday tasks and personal growth.
-
-Be warm and supportive without being overly sentimental.
-Give clear, practical answers.
-When teaching something, prefer step-by-step guidance.
-Do not claim to have performed an action unless the application
-actually performed it.
-Respect the user's privacy.
-
-This application has a separate free web-search layer. When web
-research is supplied below, treat those sources as the only evidence
-for current or externally verifiable claims. Prefer primary and
-official sources. Do not invent facts, citations, page contents, or
-search results.
-
-If web research is supplied, answer the user's question using it and
-include the relevant source URLs. Clearly distinguish information
-supported by the retrieved sources from anything uncertain.
-
-You are an assistant, not a replacement for qualified professionals
-in medical, legal or financial matters.
-"""
-
-        web_context = ""
-        if web_required:
-            web_context = (
-                "\n\nLIVE WEB RESEARCH RETRIEVED BY THE APPLICATION:\n"
-                + format_web_context(web_results)
-            )
+                conversation_text += f"Assistant: {content}\\n"
 
         prompt = (
-            system_instruction
-            + "\n\nRecent conversation:\n"
+            "Recent conversation:\\n"
             + conversation_text
-            + web_context
-            + "\n\nCurrent user message:\n"
+            + "\\nCurrent user message:\\n"
             + text
         )
 
-        print("Sending request to Gemini...", flush=True)
-
-        response = None
-        last_error = None
-
-        for model_name in GEMINI_MODELS:
-            try:
-                print("Trying Gemini model: " + model_name, flush=True)
-                response = gemini_client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                )
-                print("Gemini response received from " + model_name + ".", flush=True)
-                break
-            except Exception as error:
-                last_error = error
-                print(
-                    "Gemini model " + model_name + " failed: "
-                    + repr(error),
-                    flush=True,
-                )
-
-        if response is None:
-            raise RuntimeError(
-                "All discovered Gemini models were unavailable: " + repr(last_error)
-            )
-
-        reply = response.text or "I couldn't generate a response right now."
-        print("Gemini response received.", flush=True)
+        print("Starting Gemini agent...", flush=True)
+        reply = run_agent(prompt)
+        print("Gemini agent completed.", flush=True)
 
         save_message(user_id, "assistant", reply)
         send_telegram_message(chat_id, reply)
