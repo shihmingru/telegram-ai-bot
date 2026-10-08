@@ -332,7 +332,6 @@ def _fetch_official_academic_sources(query, headers, max_results=5):
     """
     if not _academic_faculty_query(query):
         return []
-\n    # Direct official pages are the first browsing targets.\n
     official_pages = [
         ("University of Oxford - AMES people",
          "https://www.ames.ox.ac.uk/people"),
