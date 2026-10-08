@@ -119,6 +119,7 @@ def discover_gemini_models():
 
 
 GEMINI_MODELS = discover_gemini_models()
+WEB_SEARCH_MODEL = "gemini-2.5-flash"
 
 
 def save_message(user_id, role, content):
@@ -297,7 +298,7 @@ professionals in medical, legal or financial matters.
         response = None
         last_error = None
 
-        for model_name in GEMINI_MODELS:
+        for model_name in [WEB_SEARCH_MODEL]:
             try:
                 print("Trying Gemini model: " + model_name, flush=True)
                 response = gemini_client.models.generate_content(
