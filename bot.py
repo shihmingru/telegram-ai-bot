@@ -275,6 +275,8 @@ def free_web_search(query, max_results=5):
     seen = set()
 
     search_endpoints = [
+        ("Mojeek", "https://www.mojeek.com/search", {}),
+        ("Yahoo", "https://search.yahoo.com/search", {}),
         ("Google", "https://www.google.com/search", {"gbv": "1"}),
         ("Bing", "https://www.bing.com/search", {}),
         ("DuckDuckGo", "https://html.duckduckgo.com/html/", {}),
