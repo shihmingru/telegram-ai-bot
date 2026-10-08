@@ -960,7 +960,6 @@ def get_telegram_media_parts(message):
 
     supported_prefixes = ("image/", "audio/", "video/")
     supported_exact = {"application/pdf"}
-    max_bytes = 15 * 1024 * 1024
 
     for file_id, mime_type, label in candidates:
         if not file_id:
@@ -985,17 +984,9 @@ def get_telegram_media_parts(message):
             file_path = file_info.get("file_path")
             if not file_path:
                 raise RuntimeError("Telegram did not return a file path")
-            if file_size and file_size > max_bytes:
-                notes.append("The attached " + label + " exceeds the current 15 MB processing limit.")
-                continue
-
             download_url = "https://api.telegram.org/file/bot" + TELEGRAM_TOKEN + "/" + file_path
             file_response = requests.get(download_url, timeout=45)
             file_response.raise_for_status()
-            if len(file_response.content) > max_bytes:
-                notes.append("The attached " + label + " exceeds the current 15 MB processing limit.")
-                continue
-
             media_parts.append(types.Part.from_bytes(
                 data=file_response.content,
                 mime_type=mime_type,
