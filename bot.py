@@ -211,60 +211,106 @@ def _clean_html_text(html):
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _extract_generic_search_results(html, provider, max_results=10):
+    """Extract ordinary external links from public search-result HTML."""
+    results = []
+    seen = set()
+
+    pattern = re.compile(
+        r'<a\\b[^>]*href=["\\\']([^"\\\']+)["\\\'][^>]*>(.*?)</a>',
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
+    blocked_hosts = {
+        "google.com", "www.google.com", "bing.com", "www.bing.com",
+        "duckduckgo.com", "www.duckduckgo.com",
+    }
+
+    for href, title_html in pattern.findall(html):
+        url = unquote(href).strip()
+        title = _clean_html_text(title_html)
+
+        if url.startswith("//"):
+            url = "https:" + url
+
+        if not url.startswith(("http://", "https://")):
+            continue
+
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").lower()
+        if any(host == blocked or host.endswith("." + blocked) for blocked in blocked_hosts):
+            continue
+
+        if not title or len(title) < 3 or url in seen:
+            continue
+
+        seen.add(url)
+        results.append({"title": title[:300], "url": url, "snippet": ""})
+
+        if len(results) >= max_results:
+            break
+
+    print(
+        provider + " generic extractor found "
+        + str(len(results))
+        + " external links.",
+        flush=True,
+    )
+    return results
+
+
 def free_web_search(query, max_results=5):
     """Search the public web without an API key or paid search provider."""
     print("Free web search requested:", query, flush=True)
 
     headers = {
         "User-Agent": (
-            "Mozilla/5.0 (compatible; TelegramAIAgent/1.0; "
-            "+https://telegram-ai-bot-57fa.onrender.com)"
-        )
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+        ),
+        "Accept-Language": "en-US,en;q=0.9",
     }
 
     results = []
     seen = set()
 
-    # Try Google Search first. It is a public HTML endpoint and requires no
-    # API key. DuckDuckGo is retained as a second free fallback.
     search_endpoints = [
-        ("Google", "https://www.google.com/search"),
-        ("DuckDuckGo", "https://html.duckduckgo.com/html/"),
+        ("Google", "https://www.google.com/search", {"gbv": "1"}),
+        ("Bing", "https://www.bing.com/search", {}),
+        ("DuckDuckGo", "https://html.duckduckgo.com/html/", {}),
     ]
 
-    for provider, endpoint in search_endpoints:
+    for provider, endpoint, extra_params in search_endpoints:
         try:
+            params = {"q": query}
+            params.update(extra_params)
+
             response = requests.get(
                 endpoint,
-                params={"q": query},
+                params=params,
                 headers=headers,
-                timeout=10,
+                timeout=8,
             )
             response.raise_for_status()
 
+            candidate_results = []
+
             parser = SearchResultParser()
             parser.feed(response.text)
-            candidate_results = list(parser.results)
+            candidate_results.extend(parser.results)
 
-            # Google uses /url?q=... redirects in some HTML responses.
-            if not candidate_results and provider == "Google":
-                matches = re.findall(
-                    r'<a[^>]+href="/url\?q=([^"&]+)[^"]*"[^>]*>(.*?)</a>',
+            if not candidate_results:
+                candidate_results = _extract_generic_search_results(
                     response.text,
-                    flags=re.IGNORECASE | re.DOTALL,
+                    provider,
+                    max_results=10,
                 )
-                for href, title_html in matches:
-                    url = unquote(href)
-                    title = _clean_html_text(title_html)
-                    if title and url.startswith(("http://", "https://")):
-                        candidate_results.append(
-                            {"title": title, "url": url, "snippet": ""}
-                        )
 
             for item in candidate_results:
-                if item["url"] in seen:
+                url = item.get("url")
+                if not url or url in seen:
                     continue
-                seen.add(item["url"])
+                seen.add(url)
                 results.append(item)
                 if len(results) >= max_results:
                     break
@@ -289,16 +335,13 @@ def free_web_search(query, max_results=5):
         print("Free web search returned 0 results.", flush=True)
         return []
 
-
-    # Fetch a small amount of page text so answers can use the actual
-    # page content rather than relying only on search-engine snippets.
     enriched = []
     for item in results[:3]:
         try:
             page = requests.get(
                 item["url"],
                 headers=headers,
-                timeout=8,
+                timeout=6,
                 allow_redirects=True,
             )
             content_type = page.headers.get("content-type", "").lower()
