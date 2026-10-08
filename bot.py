@@ -318,10 +318,6 @@ def free_web_search(query, max_results=5):
 
         return enriched
 
-    except Exception as error:
-        print("FREE WEB SEARCH ERROR:", repr(error), flush=True)
-        return []
-
 
 def query_requires_web(text):
     """Conservative detector for requests whose answer can change over time."""
