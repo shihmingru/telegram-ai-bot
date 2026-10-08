@@ -1,13 +1,15 @@
 import os
 import hashlib
 import threading
+import re
+from html.parser import HTMLParser
+from urllib.parse import parse_qs, unquote, urlparse
 
 import requests
 from flask import Flask, request
 import psycopg
 
 from google import genai
-from google.genai import types
 
 
 PORT = int(os.environ.get("PORT", "10000"))
@@ -119,7 +121,195 @@ def discover_gemini_models():
 
 
 GEMINI_MODELS = discover_gemini_models()
-WEB_SEARCH_MODEL = "gemini-3.8-flash"
+
+
+class SearchResultParser(HTMLParser):
+    """Small dependency-free parser for DuckDuckGo HTML results."""
+
+    def __init__(self):
+        super().__init__()
+        self.results = []
+        self._current_url = None
+        self._current_title = []
+        self._current_snippet = []
+        self._in_title = False
+        self._in_snippet = False
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        classes = (attrs.get("class") or "").split()
+
+        if tag == "a" and "result__a" in classes:
+            self._current_url = attrs.get("href")
+            self._current_title = []
+            self._in_title = True
+
+        if self._current_url and "result__snippet" in classes:
+            self._current_snippet = []
+            self._in_snippet = True
+
+    def handle_endtag(self, tag):
+        if tag == "a" and self._in_title and self._current_url:
+            title = " ".join("".join(self._current_title).split())
+            url = self._normalise_ddg_url(self._current_url)
+            if title and url:
+                self.results.append(
+                    {"title": title, "url": url, "snippet": ""}
+                )
+            self._in_title = False
+
+        if self._in_snippet:
+            self._in_snippet = False
+
+    def handle_data(self, data):
+        if self._in_title:
+            self._current_title.append(data)
+        elif self._in_snippet:
+            self._current_snippet.append(data)
+
+    def _normalise_ddg_url(self, href):
+        if not href:
+            return None
+        if href.startswith("//"):
+            href = "https:" + href
+        if href.startswith("http://") or href.startswith("https://"):
+            return href
+
+        parsed = urlparse(href)
+        if parsed.path.startswith("/l/"):
+            params = parse_qs(parsed.query)
+            target = params.get("uddg", [None])[0]
+            if target:
+                return unquote(target)
+        return None
+
+
+def _clean_html_text(html):
+    class TextParser(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.parts = []
+            self.skip_depth = 0
+
+        def handle_starttag(self, tag, attrs):
+            if tag in {"script", "style", "noscript", "svg"}:
+                self.skip_depth += 1
+
+        def handle_endtag(self, tag):
+            if tag in {"script", "style", "noscript", "svg"} and self.skip_depth:
+                self.skip_depth -= 1
+
+        def handle_data(self, data):
+            if not self.skip_depth:
+                value = " ".join(data.split())
+                if value:
+                    self.parts.append(value)
+
+    parser = TextParser()
+    parser.feed(html)
+    text = " ".join(parser.parts)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def free_web_search(query, max_results=5):
+    """Search the public web without an API key or paid search provider."""
+    print("Free web search requested:", query, flush=True)
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (compatible; TelegramAIAgent/1.0; "
+            "+https://telegram-ai-bot-57fa.onrender.com)"
+        )
+    }
+
+    try:
+        response = requests.get(
+            "https://html.duckduckgo.com/html/",
+            params={"q": query},
+            headers=headers,
+            timeout=12,
+        )
+        response.raise_for_status()
+
+        parser = SearchResultParser()
+        parser.feed(response.text)
+
+        results = []
+        seen = set()
+        for item in parser.results:
+            if item["url"] in seen:
+                continue
+            seen.add(item["url"])
+            results.append(item)
+            if len(results) >= max_results:
+                break
+
+        print("Free web search returned", len(results), "results.", flush=True)
+
+        # Fetch a small amount of page text so answers can use the actual
+        # page content rather than relying only on search-engine snippets.
+        enriched = []
+        for item in results[:3]:
+            try:
+                page = requests.get(
+                    item["url"],
+                    headers=headers,
+                    timeout=8,
+                    allow_redirects=True,
+                )
+                content_type = page.headers.get("content-type", "").lower()
+                if page.ok and "text/html" in content_type:
+                    page_text = _clean_html_text(page.text)
+                    item["page_text"] = page_text[:7000]
+                else:
+                    item["page_text"] = ""
+            except Exception as error:
+                print(
+                    "Web page fetch failed for " + item["url"] + ": "
+                    + repr(error),
+                    flush=True,
+                )
+                item["page_text"] = ""
+            enriched.append(item)
+
+        return enriched
+
+    except Exception as error:
+        print("FREE WEB SEARCH ERROR:", repr(error), flush=True)
+        return []
+
+
+def query_requires_web(text):
+    """Conservative detector for requests whose answer can change over time."""
+    lowered = text.lower()
+
+    indicators = [
+        "current", "currently", "latest", "today", "tonight", "this week",
+        "this month", "this year", "recent", "recently", "updated",
+        "up-to-date", "up to date", "as of", "now", "news", "requirements",
+        "visa", "price", "prices", "cost", "schedule", "opening hours",
+        "weather", "exchange rate", "stock", "deadline", "release date",
+        "official source", "official sources", "search the web", "look up",
+        "find online", "on the internet", "online", "who is", "what happened",
+    ]
+
+    return any(indicator in lowered for indicator in indicators)
+
+
+def format_web_context(results):
+    if not results:
+        return ""
+
+    chunks = []
+    for index, item in enumerate(results, 1):
+        chunks.append(
+            "SOURCE " + str(index) + "\n"
+            + "Title: " + item.get("title", "") + "\n"
+            + "URL: " + item.get("url", "") + "\n"
+            + "Search snippet: " + item.get("snippet", "") + "\n"
+            + "Page text: " + item.get("page_text", "")
+        )
+    return "\n\n".join(chunks)
 
 
 def save_message(user_id, role, content):
@@ -260,13 +450,24 @@ def process_message(update_data):
             elif role == "assistant":
                 conversation_text += f"Assistant: {content}\n"
 
+        web_required = query_requires_web(text)
+        web_results = free_web_search(text) if web_required else []
+
+        if web_required and not web_results:
+            reply = (
+                "I couldn't complete a live web search for that request right now. "
+                "I won't pretend that I searched. Please try again in a moment."
+            )
+            save_message(user_id, "assistant", reply)
+            send_telegram_message(chat_id, reply)
+            return
+
         system_instruction = """
 You are a calm, kind, compassionate and practical personal AI
 companion.
 
-Your role is to help the user with learning, planning,
-organization, problem solving, creativity, everyday tasks and
-personal growth.
+Your role is to help the user with learning, planning, organization,
+problem solving, creativity, everyday tasks and personal growth.
 
 Be warm and supportive without being overly sentimental.
 Give clear, practical answers.
@@ -275,20 +476,32 @@ Do not claim to have performed an action unless the application
 actually performed it.
 Respect the user's privacy.
 
-When the user asks for current, recent, changing, or externally
-verifiable information, use the available web search tool. Prefer
-primary and official sources when possible. If web search is not
-available or fails, say so rather than pretending that you searched.
-When web search results are used, include useful source links when
-available.
-You are an assistant, not a replacement for qualified
-professionals in medical, legal or financial matters.
+This application has a separate free web-search layer. When web
+research is supplied below, treat those sources as the only evidence
+for current or externally verifiable claims. Prefer primary and
+official sources. Do not invent facts, citations, page contents, or
+search results.
+
+If web research is supplied, answer the user's question using it and
+include the relevant source URLs. Clearly distinguish information
+supported by the retrieved sources from anything uncertain.
+
+You are an assistant, not a replacement for qualified professionals
+in medical, legal or financial matters.
 """
+
+        web_context = ""
+        if web_required:
+            web_context = (
+                "\n\nLIVE WEB RESEARCH RETRIEVED BY THE APPLICATION:\n"
+                + format_web_context(web_results)
+            )
 
         prompt = (
             system_instruction
             + "\n\nRecent conversation:\n"
             + conversation_text
+            + web_context
             + "\n\nCurrent user message:\n"
             + text
         )
@@ -298,55 +511,22 @@ professionals in medical, legal or financial matters.
         response = None
         last_error = None
 
-        for model_name in [WEB_SEARCH_MODEL]:
+        for model_name in GEMINI_MODELS:
             try:
                 print("Trying Gemini model: " + model_name, flush=True)
                 response = gemini_client.models.generate_content(
                     model=model_name,
                     contents=prompt,
-                    config=types.GenerateContentConfig(
-                        tools=[
-                            types.Tool(
-                                google_search=types.GoogleSearch()
-                            )
-                        ]
-                    ),
                 )
                 print("Gemini response received from " + model_name + ".", flush=True)
                 break
             except Exception as error:
                 last_error = error
-                error_text = repr(error)
                 print(
-                    "Gemini model " + model_name + " failed: " + error_text,
+                    "Gemini model " + model_name + " failed: "
+                    + repr(error),
                     flush=True,
                 )
-                if "503" not in error_text and "UNAVAILABLE" not in error_text:
-                    try:
-                        print(
-                            "Retrying Gemini model without web search tool: "
-                            + model_name,
-                            flush=True,
-                        )
-                        response = gemini_client.models.generate_content(
-                            model=model_name,
-                            contents=prompt,
-                        )
-                        print(
-                            "Gemini response received from "
-                            + model_name
-                            + " without web search.",
-                            flush=True,
-                        )
-                        break
-                    except Exception as fallback_error:
-                        last_error = fallback_error
-                        print(
-                            "Gemini fallback failed: "
-                            + repr(fallback_error),
-                            flush=True,
-                        )
-                        raise
 
         if response is None:
             raise RuntimeError(
