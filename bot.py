@@ -770,10 +770,43 @@ def execute_agent_tool(name, args):
     return {"error": "Unknown tool: " + name}
 
 
+def clean_telegram_text(text):
+    """Remove distracting markdown-style formatting before sending to Telegram."""
+    if not text:
+        return text
+
+    text = str(text)
+
+    # Remove Markdown emphasis and code markers.
+    text = text.replace("**", "").replace("__", "").replace("~~", "")
+    text = text.replace("\`", "")
+
+    # Remove Markdown heading markers at the beginning of lines.
+    text = re.sub(r"(?m)^\s{0,3}#{1,6}\s*", "", text)
+
+    # Remove decorative bullet markers so Telegram text reads naturally.
+    text = re.sub(r"(?m)^\s*[-*+]\s+", "", text)
+    text = re.sub(r"(?m)^\s*[•▪▫◦‣]\s+", "", text)
+
+    # Remove long dash characters used as decorative separators.
+    text = text.replace("—", " ").replace("–", " ")
+    text = re.sub(r"\s+-{3,}\s*", "\n", text)
+
+    # Remove hexadecimal colour/code tokens that sometimes appear as noise.
+    text = re.sub(r"(?<![A-Za-z0-9])#[0-9A-Fa-f]{6,8}(?![A-Za-z0-9])", "", text)
+
+    # Collapse excessive blank lines and whitespace introduced by cleanup.
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
 def run_agent(prompt):
     """Run a bounded Gemini tool-calling loop."""
     system_instruction = """
 You are a calm, kind, compassionate and practical personal AI companion.
+
+Formatting rule: write clean plain text. Do not use Markdown headings, bold, italics, asterisks, decorative bullets, long dashes, code fences, hexadecimal-looking identifiers, or decorative separators. Use short paragraphs and simple numbered lists only when genuinely useful. Never add formatting noise.
 
 You are an actual tool-using agent. You have live web tools available.
 Choose tools when they are useful. Do not claim that you searched,
@@ -934,6 +967,7 @@ def process_message(update_data):
         reply = run_agent(prompt)
         print("Gemini agent completed.", flush=True)
 
+        reply = clean_telegram_text(reply)
         save_message(user_id, "assistant", reply)
         send_telegram_message(chat_id, reply)
 
