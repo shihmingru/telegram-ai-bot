@@ -259,6 +259,78 @@ def _extract_generic_search_results(html, provider, max_results=10):
     return results
 
 
+def _academic_faculty_query(query):
+    lowered = query.lower()
+    academic_terms = [
+        "faculty", "professor", "supervisor", "phd", "dphil",
+        "buddhist studies", "research areas", "research interests",
+        "university", "academic", "remote options",
+    ]
+    return any(term in lowered for term in academic_terms)
+
+
+def _fetch_official_academic_sources(query, headers, max_results=5):
+    """Fetch known official university directories directly.
+
+    This avoids dependence on public search-engine HTML, which can be
+    blocked from cloud hosting. These are primary institutional sources.
+    """
+    if not _academic_faculty_query(query):
+        return []
+
+    official_pages = [
+        ("University of Oxford - AMES people",
+         "https://www.ames.ox.ac.uk/people"),
+        ("University of Oxford - Theology and Religion people",
+         "https://www.theology.ox.ac.uk/people"),
+        ("University of Cambridge - AMES people",
+         "https://www.ames.cam.ac.uk/people"),
+        ("University of Cambridge - Faculty of Divinity directory",
+         "https://www.divinity.cam.ac.uk/directory"),
+    ]
+
+    results = []
+    for title, url in official_pages:
+        try:
+            response = requests.get(
+                url,
+                headers=headers,
+                timeout=8,
+                allow_redirects=True,
+            )
+            response.raise_for_status()
+            content_type = response.headers.get("content-type", "").lower()
+            if "text/html" not in content_type:
+                continue
+
+            page_text = _clean_html_text(response.text)
+            if not page_text:
+                continue
+
+            results.append({
+                "title": title,
+                "url": response.url,
+                "snippet": "Official university directory or people page.",
+                "page_text": page_text[:12000],
+            })
+            print(
+                "Official academic source retrieved: " + title,
+                flush=True,
+            )
+
+            if len(results) >= max_results:
+                break
+
+        except Exception as error:
+            print(
+                "Official academic source failed for "
+                + url + ": " + repr(error),
+                flush=True,
+            )
+
+    return results
+
+
 def free_web_search(query, max_results=5):
     """Search the public web without an API key or paid search provider."""
     print("Free web search requested:", query, flush=True)
