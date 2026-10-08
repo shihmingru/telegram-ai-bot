@@ -801,8 +801,8 @@ def clean_telegram_text(text):
     return text.strip()
 
 
-def run_agent(prompt):
-    """Run a bounded Gemini tool-calling loop."""
+def run_agent(prompt, media_parts=None):
+    """Run a bounded Gemini tool-calling loop with optional image/audio/video/file input."""
     system_instruction = """
 You are a calm, kind, compassionate and practical personal AI companion.
 
@@ -826,12 +826,17 @@ the relevant URLs.
 If a tool fails or returns no sources, say that clearly. Never invent
 search results, page contents, citations, URLs, or facts.
 
-You can answer normally when web tools are unnecessary. You may use
-multiple tool calls when needed, but stop when you have enough evidence.
+You can analyze images, audio, video, and supported documents supplied with the user's message.
+Describe what is actually visible or audible, distinguish observation from inference, and say when the media is unclear.
+If the user includes a URL, use web_open to inspect it when its contents matter; do not treat a URL as if you have read it.
+You can answer normally when web tools are unnecessary. You may use multiple tool calls when needed, but stop when you have enough evidence.
 """
 
     tools = build_agent_tools()
-    contents = [prompt]
+    initial_parts = [types.Part.from_text(text=prompt)]
+    if media_parts:
+        initial_parts.extend(media_parts)
+    contents = [types.Content(role="user", parts=initial_parts)]
 
     for step in range(6):
         print("Agent reasoning/tool step:", step + 1, flush=True)
@@ -922,31 +927,123 @@ multiple tool calls when needed, but stop when you have enough evidence.
     )
 
 
+def get_telegram_media_parts(message):
+    """Download supported Telegram attachments and convert them to Gemini parts."""
+    media_parts = []
+    notes = []
+    candidates = []
+
+    # Telegram photos are arrays of sizes; the last is usually the largest.
+    photos = message.get("photo") or []
+    if photos:
+        candidates.append((photos[-1].get("file_id"), "image/jpeg", "photo"))
+
+    if message.get("voice"):
+        item = message["voice"]
+        candidates.append((item.get("file_id"), item.get("mime_type") or "audio/ogg", "voice message"))
+    if message.get("audio"):
+        item = message["audio"]
+        candidates.append((item.get("file_id"), item.get("mime_type") or "audio/mpeg", "audio"))
+    if message.get("video"):
+        item = message["video"]
+        candidates.append((item.get("file_id"), item.get("mime_type") or "video/mp4", "video"))
+    if message.get("video_note"):
+        item = message["video_note"]
+        candidates.append((item.get("file_id"), item.get("mime_type") or "video/mp4", "video note"))
+    if message.get("animation"):
+        item = message["animation"]
+        candidates.append((item.get("file_id"), item.get("mime_type") or "video/mp4", "animation"))
+    if message.get("document"):
+        item = message["document"]
+        mime = item.get("mime_type") or "application/octet-stream"
+        candidates.append((item.get("file_id"), mime, "document"))
+
+    supported_prefixes = ("image/", "audio/", "video/")
+    supported_exact = {"application/pdf"}
+    max_bytes = 15 * 1024 * 1024
+
+    for file_id, mime_type, label in candidates:
+        if not file_id:
+            notes.append("Telegram attachment could not be identified.")
+            continue
+        if not (mime_type.startswith(supported_prefixes) or mime_type in supported_exact):
+            notes.append("The attached " + label + " has an unsupported file type: " + mime_type)
+            continue
+
+        try:
+            meta_response = requests.get(
+                TELEGRAM_API + "/getFile",
+                params={"file_id": file_id},
+                timeout=20,
+            )
+            meta_response.raise_for_status()
+            meta = meta_response.json()
+            if not meta.get("ok"):
+                raise RuntimeError("Telegram getFile returned an error")
+            file_info = meta.get("result", {})
+            file_size = file_info.get("file_size", 0)
+            file_path = file_info.get("file_path")
+            if not file_path:
+                raise RuntimeError("Telegram did not return a file path")
+            if file_size and file_size > max_bytes:
+                notes.append("The attached " + label + " exceeds the current 15 MB processing limit.")
+                continue
+
+            download_url = "https://api.telegram.org/file/bot" + TELEGRAM_TOKEN + "/" + file_path
+            file_response = requests.get(download_url, timeout=45)
+            file_response.raise_for_status()
+            if len(file_response.content) > max_bytes:
+                notes.append("The attached " + label + " exceeds the current 15 MB processing limit.")
+                continue
+
+            media_parts.append(types.Part.from_bytes(
+                data=file_response.content,
+                mime_type=mime_type,
+            ))
+            print("Downloaded Telegram " + label + " for multimodal analysis.", flush=True)
+        except Exception as error:
+            print("TELEGRAM MEDIA DOWNLOAD ERROR:", repr(error), flush=True)
+            notes.append("I could not download the attached " + label + " from Telegram.")
+
+    return media_parts, notes
+
+
 def process_message(update_data):
     try:
         message = update_data.get("message")
         if not message:
             return
 
-        text = message.get("text")
+        text = message.get("text") or message.get("caption") or ""
         chat = message.get("chat")
         user = message.get("from")
-        if not text or not chat or not user:
+        if not chat or not user:
             return
 
         chat_id = chat.get("id")
         user_id = user.get("id")
+        media_parts, media_notes = get_telegram_media_parts(message)
 
-        print("Received:", text, flush=True)
+        if not text and not media_parts:
+            send_telegram_message(
+                chat_id,
+                "I can work with text, images, voice messages, audio, videos, links, and supported documents. This attachment type may not be supported yet.",
+            )
+            return
+
+        print("Received message. Text present:", bool(text), "media parts:", len(media_parts), flush=True)
 
         if text.startswith("/start"):
             send_telegram_message(
                 chat_id,
-                "Hello! I'm online and ready. I'm also connected to your private memory system.",
+                "Hello! Send me text, photos, voice messages, audio, videos, links, or supported documents. I can analyze them and help with follow-up tasks.",
             )
             return
 
-        save_message(user_id, "user", text)
+        stored_user_text = text or "[User sent media without a caption]"
+        if media_parts:
+            stored_user_text += " [Attached media: " + str(len(media_parts)) + " item(s)]"
+        save_message(user_id, "user", stored_user_text)
         recent_messages = get_recent_messages(user_id, limit=10)
 
         conversation_text = ""
@@ -957,14 +1054,16 @@ def process_message(update_data):
                 conversation_text += f"Assistant: {content}\\n"
 
         prompt = (
-            "Recent conversation:\\n"
+            "Recent conversation:\n"
             + conversation_text
-            + "\\nCurrent user message:\\n"
-            + text
+            + "\nCurrent user message:\n"
+            + (text or "Please inspect the attached media and respond to the user's likely intent.")
         )
+        if media_notes:
+            prompt += "\nAttachment notes:\n" + "\n".join(media_notes)
 
         print("Starting Gemini agent...", flush=True)
-        reply = run_agent(prompt)
+        reply = run_agent(prompt, media_parts=media_parts)
         print("Gemini agent completed.", flush=True)
 
         reply = clean_telegram_text(reply)
