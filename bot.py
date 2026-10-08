@@ -10,6 +10,7 @@ from flask import Flask, request
 import psycopg
 
 from google import genai
+from google.genai import types
 
 
 PORT = int(os.environ.get("PORT", "10000"))  # Render web service
@@ -184,6 +185,60 @@ class SearchResultParser(HTMLParser):
         return None
 
 
+
+
+def web_open(url, max_chars=12000):
+    headers = {"User-Agent": "Mozilla/5.0", "Accept-Language": "en-US,en;q=0.9"}
+    response = requests.get(url, headers=headers, timeout=10, allow_redirects=True)
+    response.raise_for_status()
+    content_type = response.headers.get("content-type", "").lower()
+    if "text/html" not in content_type:
+        return {"url": response.url, "text": "", "links": []}
+    text = _clean_html_text(response.text)[:max_chars]
+    parser = HTMLParser()
+    links = []
+    class LinkCollector(HTMLParser):
+        def handle_starttag(self, tag, attrs):
+            if tag == "a":
+                href = dict(attrs).get("href")
+                if href:
+                    link = requests.compat.urljoin(response.url, href)
+                    if link.startswith(("http://", "https://")) and link not in links:
+                        links.append(link)
+    collector = LinkCollector()
+    collector.feed(response.text)
+    return {"url": response.url, "text": text, "links": links[:100]}
+
+
+def web_crawl(start_url, max_pages=5):
+    root = (urlparse(start_url).hostname or "").lower()
+    queue = [start_url]
+    visited = set()
+    pages = []
+    while queue and len(pages) < max_pages:
+        url = queue.pop(0)
+        if url in visited:
+            continue
+        visited.add(url)
+        try:
+            page = web_open(url)
+            pages.append({"url": page["url"], "text": page["text"]})
+            print("Web crawler read page: " + page["url"], flush=True)
+            scored = []
+            for link in page.get("links", []):
+                if (urlparse(link).hostname or "").lower() != root or link in visited:
+                    continue
+                path = (urlparse(link).path or "").lower()
+                score = sum(word in path for word in ("people", "faculty", "profile", "research", "staff", "phd", "directory", "postgraduate"))
+                scored.append((score, link))
+            scored.sort(reverse=True)
+            for _, link in scored:
+                if link not in queue:
+                    queue.append(link)
+        except Exception as error:
+            print("Web crawl failed: " + repr(error), flush=True)
+    return pages
+
 def _clean_html_text(html):
     class TextParser(HTMLParser):
         def __init__(self):
@@ -277,7 +332,7 @@ def _fetch_official_academic_sources(query, headers, max_results=5):
     """
     if not _academic_faculty_query(query):
         return []
-
+\n    # Direct official pages are the first browsing targets.\n
     official_pages = [
         ("University of Oxford - AMES people",
          "https://www.ames.ox.ac.uk/people"),
