@@ -12,7 +12,7 @@ import psycopg
 from google import genai
 
 
-PORT = int(os.environ.get("PORT", "10000"))
+PORT = int(os.environ.get("PORT", "10000"))  # Render web service
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
