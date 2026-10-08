@@ -119,7 +119,7 @@ def discover_gemini_models():
 
 
 GEMINI_MODELS = discover_gemini_models()
-WEB_SEARCH_MODEL = "gemini-2.5-flash"
+WEB_SEARCH_MODEL = "gemini-3.8-flash"
 
 
 def save_message(user_id, role, content):
