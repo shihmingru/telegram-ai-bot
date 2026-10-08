@@ -7,6 +7,7 @@ from flask import Flask, request
 import psycopg
 
 from google import genai
+from google.genai import types
 
 
 PORT = int(os.environ.get("PORT", "10000"))
@@ -272,6 +273,13 @@ When teaching something, prefer step-by-step guidance.
 Do not claim to have performed an action unless the application
 actually performed it.
 Respect the user's privacy.
+
+When the user asks for current, recent, changing, or externally
+verifiable information, use the available web search tool. Prefer
+primary and official sources when possible. If web search is not
+available or fails, say so rather than pretending that you searched.
+When web search results are used, include useful source links when
+available.
 You are an assistant, not a replacement for qualified
 professionals in medical, legal or financial matters.
 """
@@ -295,6 +303,13 @@ professionals in medical, legal or financial matters.
                 response = gemini_client.models.generate_content(
                     model=model_name,
                     contents=prompt,
+                    config=types.GenerateContentConfig(
+                        tools=[
+                            types.Tool(
+                                google_search=types.GoogleSearch()
+                            )
+                        ]
+                    ),
                 )
                 print("Gemini response received from " + model_name + ".", flush=True)
                 break
@@ -306,7 +321,31 @@ professionals in medical, legal or financial matters.
                     flush=True,
                 )
                 if "503" not in error_text and "UNAVAILABLE" not in error_text:
-                    raise
+                    try:
+                        print(
+                            "Retrying Gemini model without web search tool: "
+                            + model_name,
+                            flush=True,
+                        )
+                        response = gemini_client.models.generate_content(
+                            model=model_name,
+                            contents=prompt,
+                        )
+                        print(
+                            "Gemini response received from "
+                            + model_name
+                            + " without web search.",
+                            flush=True,
+                        )
+                        break
+                    except Exception as fallback_error:
+                        last_error = fallback_error
+                        print(
+                            "Gemini fallback failed: "
+                            + repr(fallback_error),
+                            flush=True,
+                        )
+                        raise
 
         if response is None:
             raise RuntimeError(
