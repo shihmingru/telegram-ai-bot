@@ -17,9 +17,8 @@ from platform_tools import (
     cancel_action, execute_approved_action, execute_platform_tool,
     platform_tool_declarations, queue_action, is_allowed_telegram_user,
 )
-from image_search import (
-    image_search_requested, search_image_bytes, format_image_search_results,
-)
+from agent_features import (add_memory, list_memories, forget_memory, memory_context, add_task, list_tasks, complete_task, add_reminder, due_reminders, skill_for)
+from safe_web import safe_get
 
 
 PORT = int(os.environ.get("PORT", "10000"))  # Render web service
@@ -76,61 +75,11 @@ gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 print("Gemini configured successfully.", flush=True)
 
 
-def discover_gemini_models():
-    try:
-        available = []
-        for model in gemini_client.models.list():
-            name = getattr(model, "name", "") or ""
-            if name.startswith("models/"):
-                name = name[len("models/"):]
-            if not name:
-                continue
-            actions = getattr(model, "supported_actions", None)
-            if actions and "generateContent" not in actions:
-                continue
-            available.append(name)
-
-        available = list(dict.fromkeys(available))
-        print(
-            "Gemini models available to this API key:",
-            ", ".join(available),
-            flush=True,
-        )
-
-        preferred = [
-            "gemini-flash-lite-latest",
-            "gemini-3.5-flash-lite",
-            "gemini-3.1-flash-lite",
-            "gemini-2.5-flash-lite",
-            "gemini-3-flash-preview",
-            "gemini-3.7-flash",
-            "gemini-3.8-flash",
-            "gemini-3.5-flash",
-            "gemini-2.5-flash",
-        ]
-
-        ordered = []
-        for name in preferred:
-            if name in available and name not in ordered:
-                ordered.append(name)
-        for name in available:
-            if "flash" in name.lower() and name not in ordered:
-                ordered.append(name)
-        for name in available:
-            if name not in ordered:
-                ordered.append(name)
-
-        if ordered:
-            print("Gemini model fallback order:", " -> ".join(ordered), flush=True)
-            return ordered
-
-    except Exception as error:
-        print("GEMINI MODEL DISCOVERY ERROR:", repr(error), flush=True)
-
-    return ["gemini-3.8-flash"]
-
-
-GEMINI_MODELS = discover_gemini_models()
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-lite").strip()
+if not GEMINI_MODEL or any(ch.isspace() for ch in GEMINI_MODEL):
+    raise RuntimeError("Set GEMINI_MODEL to one explicit Gemini model name.")
+GEMINI_MODELS = [GEMINI_MODEL]
+print("Configured single Gemini model (no model fallback):", GEMINI_MODEL, flush=True)
 
 
 class SearchResultParser(HTMLParser):
@@ -198,7 +147,7 @@ class SearchResultParser(HTMLParser):
 
 def web_open(url, max_chars=12000):
     headers = {"User-Agent": "Mozilla/5.0", "Accept-Language": "en-US,en;q=0.9"}
-    response = requests.get(url, headers=headers, timeout=10, allow_redirects=True)
+    response = safe_get(url, headers=headers, timeout=10)
     response.raise_for_status()
     content_type = response.headers.get("content-type", "").lower()
     if "text/html" not in content_type:
@@ -355,12 +304,7 @@ def _fetch_official_academic_sources(query, headers, max_results=5):
     results = []
     for title, url in official_pages:
         try:
-            response = requests.get(
-                url,
-                headers=headers,
-                timeout=8,
-                allow_redirects=True,
-            )
+            response = safe_get(url, headers=headers, timeout=8)
             response.raise_for_status()
             content_type = response.headers.get("content-type", "").lower()
             if "text/html" not in content_type:
@@ -475,12 +419,7 @@ def free_web_search(query, max_results=5):
     enriched = []
     for item in results[:3]:
         try:
-            page = requests.get(
-                item["url"],
-                headers=headers,
-                timeout=6,
-                allow_redirects=True,
-            )
+            page = safe_get(item["url"], headers=headers, timeout=6)
             content_type = page.headers.get("content-type", "").lower()
             if page.ok and "text/html" in content_type:
                 page_text = _clean_html_text(page.text)
@@ -878,41 +817,19 @@ You can answer normally when web tools are unnecessary. You may use multiple too
     for step in range(6):
         print("Agent reasoning/tool step:", step + 1, flush=True)
 
-        response = None
-        last_error = None
-
-        for model_name in GEMINI_MODELS:
-            try:
-                print("Trying Gemini agent model: " + model_name, flush=True)
-                response = gemini_client.models.generate_content(
-                    model=model_name,
-                    contents=contents,
-                    config=types.GenerateContentConfig(
-                        system_instruction=system_instruction,
-                        tools=tools,
-                    ),
-                )
-                print(
-                    "Gemini agent response received from "
-                    + model_name + ".",
-                    flush=True,
-                )
-                break
-            except Exception as error:
-                last_error = error
-                print(
-                    "Gemini agent model "
-                    + model_name
-                    + " failed: "
-                    + repr(error),
-                    flush=True,
-                )
-
-        if response is None:
-            raise RuntimeError(
-                "All discovered Gemini models were unavailable: "
-                + repr(last_error)
+        try:
+            print("Trying configured Gemini model: " + GEMINI_MODEL, flush=True)
+            response = gemini_client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    tools=tools,
+                ),
             )
+        except Exception as error:
+            print("Configured Gemini model failed; no fallback will be attempted: " + repr(error), flush=True)
+            raise RuntimeError("Configured Gemini model unavailable or quota exhausted. No alternate model was tried to avoid unexpected billing.") from error
 
         function_calls = getattr(response, "function_calls", None) or []
 
@@ -969,7 +886,7 @@ def get_telegram_media_parts(message):
     media_parts = []
     notes = []
     reverse_image_bytes = None
-    search_requested = image_search_requested(message.get("text") or message.get("caption") or "")
+    search_requested = False  # disabled in strict zero-additional-spend mode
     candidates = []
 
     attachment_fields = [
@@ -1114,6 +1031,68 @@ def process_message(update_data):
         print("Received message. Text present:", bool(text), "media parts:", len(media_parts), flush=True)
 
         command = text.strip().split()
+        personal_commands = {"/remember", "/memories", "/forget", "/task", "/tasks", "/done", "/remind"}
+        if command and command[0].split("@")[0] in personal_commands and chat.get("type") != "private":
+            send_telegram_message(chat_id, "For privacy, use personal memory, task, and reminder commands in a private chat with the bot.")
+            return
+        if chat.get("type") == "private":
+            try:
+                for reminder_chat, reminder_message, reminder_id in due_reminders(DATABASE_URL):
+                    send_telegram_message(reminder_chat, "Reminder: " + reminder_message)
+            except Exception as reminder_error:
+                print("REMINDER CHECK ERROR:", repr(reminder_error), flush=True)
+
+        if command and command[0].split("@")[0] == "/remember":
+            try:
+                ident = add_memory(DATABASE_URL, user_id, text.partition(" ")[2].strip())
+                send_telegram_message(chat_id, "Saved memory #" + str(ident) + ". Use /memories or /forget ID.")
+            except Exception as error:
+                send_telegram_message(chat_id, "I could not save that memory: " + str(error))
+            return
+        if command and command[0].split("@")[0] == "/memories":
+            rows = list_memories(DATABASE_URL, user_id)
+            listing = "\n".join("#%s %s" % (i, m) for i, m in rows) if rows else "No saved memories yet."
+            send_telegram_message(chat_id, "Saved memories:\n" + listing + "\nUse /forget ID to delete one.")
+            return
+        if command and command[0].split("@")[0] == "/forget":
+            removed = len(command) == 2 and command[1].isdigit() and forget_memory(DATABASE_URL, user_id, command[1])
+            send_telegram_message(chat_id, "Memory deleted." if removed else "No memory with that ID belongs to you. Use /forget ID.")
+            return
+        if command and command[0].split("@")[0] == "/task":
+            try:
+                ident = add_task(DATABASE_URL, user_id, text.partition(" ")[2].strip())
+                send_telegram_message(chat_id, "Added task #" + str(ident) + ". Use /tasks to review tasks.")
+            except Exception as error:
+                send_telegram_message(chat_id, "I could not add that task: " + str(error))
+            return
+        if command and command[0].split("@")[0] == "/tasks":
+            rows = list_tasks(DATABASE_URL, user_id)
+            listing = "\n".join("#%s %s" % (i, task) for i, task in rows) if rows else "No open tasks."
+            send_telegram_message(chat_id, "Open tasks:\n" + listing + "\nUse /done ID to complete a task.")
+            return
+        if command and command[0].split("@")[0] == "/done":
+            completed = len(command) == 2 and command[1].isdigit() and complete_task(DATABASE_URL, user_id, command[1])
+            send_telegram_message(chat_id, "Task marked complete." if completed else "No open task with that ID belongs to you. Use /done ID.")
+            return
+        if command and command[0].split("@")[0] == "/remind":
+            parts = text.partition(" ")[2].split("|", 1)
+            if len(parts) != 2:
+                send_telegram_message(chat_id, "Use /remind YYYY-MM-DD HH:MM | reminder text. Taiwan time; delivery is best-effort when the bot receives updates.")
+            else:
+                try:
+                    ident = add_reminder(DATABASE_URL, user_id, chat_id, parts[0].strip(), parts[1].strip())
+                    send_telegram_message(chat_id, "Saved reminder #" + str(ident) + ". Delivery is not guaranteed while the service is idle or suspended.")
+                except Exception as error:
+                    send_telegram_message(chat_id, "I could not save that reminder: " + str(error))
+            return
+        if command and command[0].split("@")[0] == "/skill":
+            skill_prompt = skill_for(text.partition(" ")[2].strip())
+            if skill_prompt:
+                save_message(user_id, "assistant", "Coaching preference: " + skill_prompt)
+                send_telegram_message(chat_id, "Coaching mode selected. Send your next message and I will guide you step by step.")
+            else:
+                send_telegram_message(chat_id, "Available skills: french, vegetarian cooking, drawing, buddhist studies, 鈴鼓. Use /skill NAME.")
+            return
         if command and command[0].split("@")[0] == "/id":
             send_telegram_message(chat_id, "Your Telegram user ID is " + str(user_id) + ". Set TELEGRAM_OWNER_IDS to this number in Render to enable platform tools for your account.")
             return
@@ -1143,7 +1122,7 @@ def process_message(update_data):
         if text.startswith("/start"):
             send_telegram_message(
                 chat_id,
-                "Hello! Send me text, photos, voice messages, audio, videos, links, or supported documents. I can analyze them and help with follow-up tasks.",
+                "Hello! Send text, photos, voice messages, audio, videos, links, or supported documents. Commands: /remember TEXT, /memories, /forget ID, /task TEXT, /tasks, /done ID, /remind YYYY-MM-DD HH:MM | TEXT, /skill NAME.",
             )
             return
 
@@ -1166,16 +1145,16 @@ def process_message(update_data):
             + "\nCurrent user message:\n"
             + (text or "Please inspect the attached media and respond to the user's likely intent.")
         )
+        saved_context = memory_context(DATABASE_URL, user_id) if chat.get("type") == "private" else ""
+        if saved_context:
+            prompt += "\n\n" + saved_context
+        selected_skill = skill_for(text)
+        if selected_skill:
+            prompt += "\n\nCoaching skill guidance:\n" + selected_skill
         if media_notes:
             prompt += "\nAttachment notes:\n" + "\n".join(media_notes)
 
-        if reverse_image_bytes is not None:
-            try:
-                image_search_result = search_image_bytes(reverse_image_bytes)
-                prompt += "\n\nReverse image search tool result:\n" + format_image_search_results(image_search_result)
-            except Exception as error:
-                print("REVERSE IMAGE SEARCH ERROR:", repr(error), flush=True)
-                prompt += "\n\nReverse image search could not complete because the configured service returned an error. Tell the user that image search failed and do not invent matches."
+        # Reverse-image search is disabled in strict zero-additional-spend mode.
 
         print("Starting Gemini agent...", flush=True)
         reply = run_agent(prompt, media_parts=media_parts, user_id=(user_id if chat.get("type") == "private" else None))
