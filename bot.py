@@ -1035,11 +1035,12 @@ def process_message(update_data):
         if command and command[0].split("@")[0] in personal_commands and chat.get("type") != "private":
             send_telegram_message(chat_id, "For privacy, use personal memory, task, and reminder commands in a private chat with the bot.")
             return
-        try:
-            for reminder_chat, reminder_message, reminder_id in due_reminders(DATABASE_URL):, reminder_message, reminder_id in due_reminders(DATABASE_URL):
-                send_telegram_message(reminder_chat, "Reminder: " + reminder_message)
-        except Exception as reminder_error:
-            print("REMINDER CHECK ERROR:", repr(reminder_error), flush=True)
+        if chat.get("type") == "private":
+            try:
+                for reminder_chat, reminder_message, reminder_id in due_reminders(DATABASE_URL):
+                    send_telegram_message(reminder_chat, "Reminder: " + reminder_message)
+            except Exception as reminder_error:
+                print("REMINDER CHECK ERROR:", repr(reminder_error), flush=True)
 
         if command and command[0].split("@")[0] == "/remember":
             try:
