@@ -17,6 +17,9 @@ from platform_tools import (
     cancel_action, execute_approved_action, execute_platform_tool,
     platform_tool_declarations, queue_action, is_allowed_telegram_user,
 )
+from image_search import (
+    image_search_requested, search_image_bytes, format_image_search_results,
+)
 
 
 PORT = int(os.environ.get("PORT", "10000"))  # Render web service
@@ -965,6 +968,8 @@ def get_telegram_media_parts(message):
     """Download supported Telegram attachments and convert them to Gemini parts."""
     media_parts = []
     notes = []
+    reverse_image_bytes = None
+    search_requested = image_search_requested(message.get("text") or message.get("caption") or "")
     candidates = []
 
     attachment_fields = [
@@ -1056,6 +1061,8 @@ def get_telegram_media_parts(message):
                 data=file_response.content,
                 mime_type=mime_type,
             ))
+            if search_requested and mime_type.startswith("image/") and reverse_image_bytes is None:
+                reverse_image_bytes = file_response.content
             print(
                 "Downloaded Telegram attachment for multimodal analysis:",
                 label,
@@ -1069,7 +1076,7 @@ def get_telegram_media_parts(message):
             print("TELEGRAM MEDIA DOWNLOAD ERROR:", repr(error), flush=True)
             notes.append("I could not download the attached " + label + " from Telegram.")
 
-    return media_parts, notes
+    return media_parts, notes, reverse_image_bytes
 
 
 def process_message(update_data):
@@ -1086,7 +1093,7 @@ def process_message(update_data):
 
         chat_id = chat.get("id")
         user_id = user.get("id")
-        media_parts, media_notes = get_telegram_media_parts(message)
+        media_parts, media_notes, reverse_image_bytes = get_telegram_media_parts(message)
 
         if not media_parts and media_notes and not text:
             send_telegram_message(
@@ -1161,6 +1168,14 @@ def process_message(update_data):
         )
         if media_notes:
             prompt += "\nAttachment notes:\n" + "\n".join(media_notes)
+
+        if reverse_image_bytes is not None:
+            try:
+                image_search_result = search_image_bytes(reverse_image_bytes)
+                prompt += "\n\nReverse image search tool result:\n" + format_image_search_results(image_search_result)
+            except Exception as error:
+                print("REVERSE IMAGE SEARCH ERROR:", repr(error), flush=True)
+                prompt += "\n\nReverse image search could not complete because the configured service returned an error. Tell the user that image search failed and do not invent matches."
 
         print("Starting Gemini agent...", flush=True)
         reply = run_agent(prompt, media_parts=media_parts, user_id=(user_id if chat.get("type") == "private" else None))
