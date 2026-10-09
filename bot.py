@@ -1031,8 +1031,12 @@ def process_message(update_data):
         print("Received message. Text present:", bool(text), "media parts:", len(media_parts), flush=True)
 
         command = text.strip().split()
+        personal_commands = {"/remember", "/memories", "/forget", "/task", "/tasks", "/done", "/remind"}
+        if command and command[0].split("@")[0] in personal_commands and chat.get("type") != "private":
+            send_telegram_message(chat_id, "For privacy, use personal memory, task, and reminder commands in a private chat with the bot.")
+            return
         try:
-            for reminder_chat, reminder_message, reminder_id in due_reminders(DATABASE_URL):
+            for reminder_chat, reminder_message, reminder_id in due_reminders(DATABASE_URL):, reminder_message, reminder_id in due_reminders(DATABASE_URL):
                 send_telegram_message(reminder_chat, "Reminder: " + reminder_message)
         except Exception as reminder_error:
             print("REMINDER CHECK ERROR:", repr(reminder_error), flush=True)
@@ -1140,7 +1144,7 @@ def process_message(update_data):
             + "\nCurrent user message:\n"
             + (text or "Please inspect the attached media and respond to the user's likely intent.")
         )
-        saved_context = memory_context(DATABASE_URL, user_id)
+        saved_context = memory_context(DATABASE_URL, user_id) if chat.get("type") == "private" else ""
         if saved_context:
             prompt += "\n\n" + saved_context
         selected_skill = skill_for(text)
