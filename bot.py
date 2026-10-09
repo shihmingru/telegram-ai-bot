@@ -17,9 +17,8 @@ from platform_tools import (
     cancel_action, execute_approved_action, execute_platform_tool,
     platform_tool_declarations, queue_action, is_allowed_telegram_user,
 )
-from image_search import (
-    image_search_requested, search_image_bytes, format_image_search_results,
-)
+from agent_features import (add_memory, list_memories, forget_memory, memory_context, add_task, list_tasks, complete_task, add_reminder, due_reminders, skill_for)
+from safe_web import safe_get
 
 
 PORT = int(os.environ.get("PORT", "10000"))  # Render web service
@@ -148,7 +147,7 @@ class SearchResultParser(HTMLParser):
 
 def web_open(url, max_chars=12000):
     headers = {"User-Agent": "Mozilla/5.0", "Accept-Language": "en-US,en;q=0.9"}
-    response = requests.get(url, headers=headers, timeout=10, allow_redirects=True)
+    response = safe_get(url, headers=headers, timeout=10)
     response.raise_for_status()
     content_type = response.headers.get("content-type", "").lower()
     if "text/html" not in content_type:
@@ -305,12 +304,7 @@ def _fetch_official_academic_sources(query, headers, max_results=5):
     results = []
     for title, url in official_pages:
         try:
-            response = requests.get(
-                url,
-                headers=headers,
-                timeout=8,
-                allow_redirects=True,
-            )
+            response = safe_get(url, headers=headers, timeout=8)
             response.raise_for_status()
             content_type = response.headers.get("content-type", "").lower()
             if "text/html" not in content_type:
@@ -425,12 +419,7 @@ def free_web_search(query, max_results=5):
     enriched = []
     for item in results[:3]:
         try:
-            page = requests.get(
-                item["url"],
-                headers=headers,
-                timeout=6,
-                allow_redirects=True,
-            )
+            page = safe_get(item["url"], headers=headers, timeout=6)
             content_type = page.headers.get("content-type", "").lower()
             if page.ok and "text/html" in content_type:
                 page_text = _clean_html_text(page.text)
@@ -1097,13 +1086,7 @@ def process_message(update_data):
         if media_notes:
             prompt += "\nAttachment notes:\n" + "\n".join(media_notes)
 
-        if reverse_image_bytes is not None:
-            try:
-                image_search_result = search_image_bytes(reverse_image_bytes)
-                prompt += "\n\nReverse image search tool result:\n" + format_image_search_results(image_search_result)
-            except Exception as error:
-                print("REVERSE IMAGE SEARCH ERROR:", repr(error), flush=True)
-                prompt += "\n\nReverse image search could not complete because the configured service returned an error. Tell the user that image search failed and do not invent matches."
+        # Reverse-image search is disabled in strict zero-additional-spend mode.
 
         print("Starting Gemini agent...", flush=True)
         reply = run_agent(prompt, media_parts=media_parts, user_id=(user_id if chat.get("type") == "private" else None))
