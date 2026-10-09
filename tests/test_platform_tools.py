@@ -24,9 +24,9 @@ class PlatformToolSafetyTests(unittest.TestCase):
         self.assertIn("content is required", result["error"])
 
     def test_platform_allowlist_fails_closed(self):
-        with patch.dict("os.environ", {}, clear=True):
-            import bot
-            self.assertFalse(bot.is_platform_user("12345"))
+        self.assertFalse(platform_tools.is_allowed_telegram_user("12345", ""))
+        self.assertFalse(platform_tools.is_allowed_telegram_user("12345", "67890"))
+        self.assertTrue(platform_tools.is_allowed_telegram_user("12345", "12345,67890"))
 
     def test_action_summary_is_specific(self):
         summary = platform_tools._action_summary(
