@@ -886,7 +886,7 @@ def get_telegram_media_parts(message):
     media_parts = []
     notes = []
     reverse_image_bytes = None
-    search_requested = image_search_requested(message.get("text") or message.get("caption") or "")
+    search_requested = False  # disabled in strict zero-additional-spend mode
     candidates = []
 
     attachment_fields = [
