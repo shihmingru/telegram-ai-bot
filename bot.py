@@ -1,5 +1,6 @@
 import os
 import hashlib
+import mimetypes
 import threading
 import re
 from html.parser import HTMLParser
@@ -933,6 +934,15 @@ def get_telegram_media_parts(message):
     notes = []
     candidates = []
 
+    attachment_fields = [
+        key for key in (
+            "photo", "document", "video", "animation", "audio",
+            "voice", "video_note"
+        )
+        if message.get(key)
+    ]
+    print("Telegram attachment fields received:", attachment_fields, flush=True)
+
     # Telegram photos are arrays of sizes; the last is usually the largest.
     photos = message.get("photo") or []
     if photos:
@@ -955,13 +965,26 @@ def get_telegram_media_parts(message):
         candidates.append((item.get("file_id"), item.get("mime_type") or "video/mp4", "animation"))
     if message.get("document"):
         item = message["document"]
-        mime = item.get("mime_type") or "application/octet-stream"
+        filename = item.get("file_name") or ""
+        mime = item.get("mime_type") or ""
+        guessed_mime = mimetypes.guess_type(filename)[0] if filename else None
+        if (not mime or mime == "application/octet-stream") and guessed_mime:
+            mime = guessed_mime
+        if not mime:
+            mime = "application/octet-stream"
         candidates.append((item.get("file_id"), mime, "document"))
 
     supported_prefixes = ("image/", "audio/", "video/")
     supported_exact = {"application/pdf"}
 
     for file_id, mime_type, label in candidates:
+        print(
+            "Processing Telegram attachment:",
+            label,
+            "MIME:",
+            mime_type,
+            flush=True,
+        )
         if not file_id:
             notes.append("Telegram attachment could not be identified.")
             continue
@@ -981,6 +1004,15 @@ def get_telegram_media_parts(message):
                 raise RuntimeError("Telegram getFile returned an error")
             file_info = meta.get("result", {})
             file_size = file_info.get("file_size", 0)
+            print(
+                "Telegram attachment metadata received:",
+                label,
+                "size_bytes:",
+                file_size,
+                "MIME:",
+                mime_type,
+                flush=True,
+            )
             file_path = file_info.get("file_path")
             if not file_path:
                 raise RuntimeError("Telegram did not return a file path")
@@ -991,7 +1023,15 @@ def get_telegram_media_parts(message):
                 data=file_response.content,
                 mime_type=mime_type,
             ))
-            print("Downloaded Telegram " + label + " for multimodal analysis.", flush=True)
+            print(
+                "Downloaded Telegram attachment for multimodal analysis:",
+                label,
+                "bytes:",
+                len(file_response.content),
+                "Gemini media parts:",
+                len(media_parts),
+                flush=True,
+            )
         except Exception as error:
             print("TELEGRAM MEDIA DOWNLOAD ERROR:", repr(error), flush=True)
             notes.append("I could not download the attached " + label + " from Telegram.")
@@ -1015,10 +1055,19 @@ def process_message(update_data):
         user_id = user.get("id")
         media_parts, media_notes = get_telegram_media_parts(message)
 
+        if not media_parts and media_notes and not text:
+            send_telegram_message(
+                chat_id,
+                "I received your attachment but could not pass it to the AI for analysis. "
+                + " ".join(media_notes)
+                + " Please try sending it as a regular photo or as an image file with a .jpg, .png, or .webp extension.",
+            )
+            return
+
         if not text and not media_parts:
             send_telegram_message(
                 chat_id,
-                "I can work with text, images, voice messages, audio, videos, links, and supported documents. This attachment type may not be supported yet.",
+                "I did not receive a readable text message or supported attachment. Please try sending the photo or image file again.",
             )
             return
 
