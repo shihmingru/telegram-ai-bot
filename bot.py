@@ -76,61 +76,11 @@ gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 print("Gemini configured successfully.", flush=True)
 
 
-def discover_gemini_models():
-    try:
-        available = []
-        for model in gemini_client.models.list():
-            name = getattr(model, "name", "") or ""
-            if name.startswith("models/"):
-                name = name[len("models/"):]
-            if not name:
-                continue
-            actions = getattr(model, "supported_actions", None)
-            if actions and "generateContent" not in actions:
-                continue
-            available.append(name)
-
-        available = list(dict.fromkeys(available))
-        print(
-            "Gemini models available to this API key:",
-            ", ".join(available),
-            flush=True,
-        )
-
-        preferred = [
-            "gemini-flash-lite-latest",
-            "gemini-3.5-flash-lite",
-            "gemini-3.1-flash-lite",
-            "gemini-2.5-flash-lite",
-            "gemini-3-flash-preview",
-            "gemini-3.7-flash",
-            "gemini-3.8-flash",
-            "gemini-3.5-flash",
-            "gemini-2.5-flash",
-        ]
-
-        ordered = []
-        for name in preferred:
-            if name in available and name not in ordered:
-                ordered.append(name)
-        for name in available:
-            if "flash" in name.lower() and name not in ordered:
-                ordered.append(name)
-        for name in available:
-            if name not in ordered:
-                ordered.append(name)
-
-        if ordered:
-            print("Gemini model fallback order:", " -> ".join(ordered), flush=True)
-            return ordered
-
-    except Exception as error:
-        print("GEMINI MODEL DISCOVERY ERROR:", repr(error), flush=True)
-
-    return ["gemini-3.8-flash"]
-
-
-GEMINI_MODELS = discover_gemini_models()
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-lite").strip()
+if not GEMINI_MODEL or any(ch.isspace() for ch in GEMINI_MODEL):
+    raise RuntimeError("Set GEMINI_MODEL to one explicit Gemini model name.")
+GEMINI_MODELS = [GEMINI_MODEL]
+print("Configured single Gemini model (no model fallback):", GEMINI_MODEL, flush=True)
 
 
 class SearchResultParser(HTMLParser):
@@ -878,41 +828,19 @@ You can answer normally when web tools are unnecessary. You may use multiple too
     for step in range(6):
         print("Agent reasoning/tool step:", step + 1, flush=True)
 
-        response = None
-        last_error = None
-
-        for model_name in GEMINI_MODELS:
-            try:
-                print("Trying Gemini agent model: " + model_name, flush=True)
-                response = gemini_client.models.generate_content(
-                    model=model_name,
-                    contents=contents,
-                    config=types.GenerateContentConfig(
-                        system_instruction=system_instruction,
-                        tools=tools,
-                    ),
-                )
-                print(
-                    "Gemini agent response received from "
-                    + model_name + ".",
-                    flush=True,
-                )
-                break
-            except Exception as error:
-                last_error = error
-                print(
-                    "Gemini agent model "
-                    + model_name
-                    + " failed: "
-                    + repr(error),
-                    flush=True,
-                )
-
-        if response is None:
-            raise RuntimeError(
-                "All discovered Gemini models were unavailable: "
-                + repr(last_error)
+        try:
+            print("Trying configured Gemini model: " + GEMINI_MODEL, flush=True)
+            response = gemini_client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    tools=tools,
+                ),
             )
+        except Exception as error:
+            print("Configured Gemini model failed; no fallback will be attempted: " + repr(error), flush=True)
+            raise RuntimeError("Configured Gemini model unavailable or quota exhausted. No alternate model was tried to avoid unexpected billing.") from error
 
         function_calls = getattr(response, "function_calls", None) or []
 
