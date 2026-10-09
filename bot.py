@@ -1112,6 +1112,9 @@ def process_message(update_data):
             return
 
         if command and command[0].split("@")[0] in ("/approve", "/cancel"):
+            if chat.get("type") != "private":
+                send_telegram_message(chat_id, "For privacy, approve or cancel platform actions in a private chat with the bot.")
+                return
             if not is_platform_user(user_id):
                 send_telegram_message(chat_id, "Platform actions are disabled for this account. The bot owner must configure TELEGRAM_OWNER_IDS first.")
                 return
@@ -1160,7 +1163,7 @@ def process_message(update_data):
             prompt += "\nAttachment notes:\n" + "\n".join(media_notes)
 
         print("Starting Gemini agent...", flush=True)
-        reply = run_agent(prompt, media_parts=media_parts, user_id=user_id)
+        reply = run_agent(prompt, media_parts=media_parts, user_id=(user_id if chat.get("type") == "private" else None))
         print("Gemini agent completed.", flush=True)
 
         reply = clean_telegram_text(reply)
