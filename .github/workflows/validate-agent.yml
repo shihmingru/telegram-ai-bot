@@ -15,5 +15,5 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m pip install requests psycopg[binary] flask google-genai
-      - run: python -m compileall -q bot.py platform_tools.py tests
+      - run: python -m compileall -q bot.py platform_tools.py image_search.py safe_web.py agent_features.py tests
       - run: python -m unittest discover -s tests -v
