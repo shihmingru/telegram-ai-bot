@@ -1031,6 +1031,63 @@ def process_message(update_data):
         print("Received message. Text present:", bool(text), "media parts:", len(media_parts), flush=True)
 
         command = text.strip().split()
+        try:
+            for reminder_chat, reminder_message, reminder_id in due_reminders(DATABASE_URL):
+                send_telegram_message(reminder_chat, "Reminder: " + reminder_message)
+        except Exception as reminder_error:
+            print("REMINDER CHECK ERROR:", repr(reminder_error), flush=True)
+
+        if command and command[0].split("@")[0] == "/remember":
+            try:
+                ident = add_memory(DATABASE_URL, user_id, text.partition(" ")[2].strip())
+                send_telegram_message(chat_id, "Saved memory #" + str(ident) + ". Use /memories or /forget ID.")
+            except Exception as error:
+                send_telegram_message(chat_id, "I could not save that memory: " + str(error))
+            return
+        if command and command[0].split("@")[0] == "/memories":
+            rows = list_memories(DATABASE_URL, user_id)
+            listing = "\n".join("#%s %s" % (i, m) for i, m in rows) if rows else "No saved memories yet."
+            send_telegram_message(chat_id, "Saved memories:\n" + listing + "\nUse /forget ID to delete one.")
+            return
+        if command and command[0].split("@")[0] == "/forget":
+            removed = len(command) == 2 and command[1].isdigit() and forget_memory(DATABASE_URL, user_id, command[1])
+            send_telegram_message(chat_id, "Memory deleted." if removed else "No memory with that ID belongs to you. Use /forget ID.")
+            return
+        if command and command[0].split("@")[0] == "/task":
+            try:
+                ident = add_task(DATABASE_URL, user_id, text.partition(" ")[2].strip())
+                send_telegram_message(chat_id, "Added task #" + str(ident) + ". Use /tasks to review tasks.")
+            except Exception as error:
+                send_telegram_message(chat_id, "I could not add that task: " + str(error))
+            return
+        if command and command[0].split("@")[0] == "/tasks":
+            rows = list_tasks(DATABASE_URL, user_id)
+            listing = "\n".join("#%s %s" % (i, task) for i, task in rows) if rows else "No open tasks."
+            send_telegram_message(chat_id, "Open tasks:\n" + listing + "\nUse /done ID to complete a task.")
+            return
+        if command and command[0].split("@")[0] == "/done":
+            completed = len(command) == 2 and command[1].isdigit() and complete_task(DATABASE_URL, user_id, command[1])
+            send_telegram_message(chat_id, "Task marked complete." if completed else "No open task with that ID belongs to you. Use /done ID.")
+            return
+        if command and command[0].split("@")[0] == "/remind":
+            parts = text.partition(" ")[2].split("|", 1)
+            if len(parts) != 2:
+                send_telegram_message(chat_id, "Use /remind YYYY-MM-DD HH:MM | reminder text. Taiwan time; delivery is best-effort when the bot receives updates.")
+            else:
+                try:
+                    ident = add_reminder(DATABASE_URL, user_id, chat_id, parts[0].strip(), parts[1].strip())
+                    send_telegram_message(chat_id, "Saved reminder #" + str(ident) + ". Delivery is not guaranteed while the service is idle or suspended.")
+                except Exception as error:
+                    send_telegram_message(chat_id, "I could not save that reminder: " + str(error))
+            return
+        if command and command[0].split("@")[0] == "/skill":
+            skill_prompt = skill_for(text.partition(" ")[2].strip())
+            if skill_prompt:
+                save_message(user_id, "assistant", "Coaching preference: " + skill_prompt)
+                send_telegram_message(chat_id, "Coaching mode selected. Send your next message and I will guide you step by step.")
+            else:
+                send_telegram_message(chat_id, "Available skills: french, vegetarian cooking, drawing, buddhist studies, 鈴鼓. Use /skill NAME.")
+            return
         if command and command[0].split("@")[0] == "/id":
             send_telegram_message(chat_id, "Your Telegram user ID is " + str(user_id) + ". Set TELEGRAM_OWNER_IDS to this number in Render to enable platform tools for your account.")
             return
@@ -1060,7 +1117,7 @@ def process_message(update_data):
         if text.startswith("/start"):
             send_telegram_message(
                 chat_id,
-                "Hello! Send me text, photos, voice messages, audio, videos, links, or supported documents. I can analyze them and help with follow-up tasks.",
+                "Hello! Send text, photos, voice messages, audio, videos, links, or supported documents. Commands: /remember TEXT, /memories, /forget ID, /task TEXT, /tasks, /done ID, /remind YYYY-MM-DD HH:MM | TEXT, /skill NAME.",
             )
             return
 
@@ -1083,6 +1140,12 @@ def process_message(update_data):
             + "\nCurrent user message:\n"
             + (text or "Please inspect the attached media and respond to the user's likely intent.")
         )
+        saved_context = memory_context(DATABASE_URL, user_id)
+        if saved_context:
+            prompt += "\n\n" + saved_context
+        selected_skill = skill_for(text)
+        if selected_skill:
+            prompt += "\n\nCoaching skill guidance:\n" + selected_skill
         if media_notes:
             prompt += "\nAttachment notes:\n" + "\n".join(media_notes)
 
