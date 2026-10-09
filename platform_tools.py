@@ -20,6 +20,14 @@ GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_CALENDAR_API = "https://www.googleapis.com/calendar/v3"
 
 
+def is_allowed_telegram_user(user_id, configured=None):
+    """Fail closed unless the Telegram account ID is explicitly allowlisted."""
+    if configured is None:
+        configured = os.getenv("TELEGRAM_OWNER_IDS", "")
+    allowed = {item.strip() for item in configured.split(",") if item.strip()}
+    return bool(allowed) and str(user_id) in allowed
+
+
 def _request(method, url, *, headers=None, params=None, payload=None):
     response = requests.request(
         method, url, headers=headers, params=params, json=payload, timeout=TIMEOUT
