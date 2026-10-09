@@ -13,6 +13,11 @@ import psycopg
 from google import genai
 from google.genai import types
 
+from platform_tools import (
+    cancel_action, execute_approved_action, execute_platform_tool,
+    platform_tool_declarations, queue_action,
+)
+
 
 PORT = int(os.environ.get("PORT", "10000"))  # Render web service
 
@@ -628,9 +633,16 @@ def configure_webhook():
         raise
 
 
-def build_agent_tools():
+def is_platform_user(user_id):
+    """Fail closed unless Telegram user ID is explicitly allowlisted."""
+    configured = os.getenv("TELEGRAM_OWNER_IDS", "")
+    allowed = {item.strip() for item in configured.split(",") if item.strip()}
+    return bool(allowed) and str(user_id) in allowed
+
+
+def build_agent_tools(user_id=None):
     """Tool declarations for Gemini's agent loop."""
-    return [
+    toolset = [
         types.Tool(
             function_declarations=[
                 types.FunctionDeclaration(
@@ -694,9 +706,30 @@ def build_agent_tools():
             ]
         )
     ]
+    if is_platform_user(user_id):
+        toolset.append(types.Tool(function_declarations=platform_tool_declarations(types)))
+    return toolset
 
 
-def execute_agent_tool(name, args):
+def execute_agent_tool(name, args, user_id=None):
+    """Execute web tools or an authorized platform tool."""
+    platform_names = {
+        "github_search_repositories", "github_get_file", "github_create_issue",
+        "render_list_services", "render_list_deploys", "render_trigger_deploy",
+        "todoist_list_tasks", "todoist_create_task",
+        "google_calendar_list_events", "google_calendar_create_event",
+    }
+    if name in platform_names:
+        if not is_platform_user(user_id):
+            return {"error": "Platform tools are disabled until TELEGRAM_OWNER_IDS is configured for this Telegram account."}
+        mutating = name in {
+            "github_create_issue", "render_trigger_deploy",
+            "todoist_create_task", "google_calendar_create_event",
+        }
+        if mutating:
+            return queue_action(DATABASE_URL, user_id, name, args)
+        return execute_platform_tool(name, args, allow_mutation=False)
+
     """Execute one agent-selected tool and return JSON-safe data."""
     if name == "web_search":
         query = str(args.get("query", "")).strip()
@@ -802,7 +835,7 @@ def clean_telegram_text(text):
     return text.strip()
 
 
-def run_agent(prompt, media_parts=None):
+def run_agent(prompt, media_parts=None, user_id=None):
     """Run a bounded Gemini tool-calling loop with optional image/audio/video/file input."""
     system_instruction = """
 You are a calm, kind, compassionate and practical personal AI companion.
@@ -810,6 +843,8 @@ You are a calm, kind, compassionate and practical personal AI companion.
 Formatting rule: write clean plain text. Do not use Markdown headings, bold, italics, asterisks, decorative bullets, long dashes, code fences, hexadecimal-looking identifiers, or decorative separators. Use short paragraphs and simple numbered lists only when genuinely useful. Never add formatting noise.
 
 You are an actual tool-using agent. You have live web tools available.
+If platform tools are available, you may inspect GitHub, Render, Todoist, and Google Calendar.
+Any operation that creates, sends, deploys, edits, or otherwise changes external state must be queued for explicit user approval. Explain the exact proposed action and tell the user to use /approve ACTION_ID or /cancel ACTION_ID. Never say it is complete before approval and a successful API result.
 Choose tools when they are useful. Do not claim that you searched,
 opened, or crawled a webpage unless a tool actually returned it.
 
@@ -833,7 +868,7 @@ If the user includes a URL, use web_open to inspect it when its contents matter;
 You can answer normally when web tools are unnecessary. You may use multiple tool calls when needed, but stop when you have enough evidence.
 """
 
-    tools = build_agent_tools()
+    tools = build_agent_tools(user_id)
     initial_parts = [types.Part.from_text(text=prompt)]
     if media_parts:
         initial_parts.extend(media_parts)
@@ -899,7 +934,7 @@ You can answer normally when web tools are unnecessary. You may use multiple too
             )
 
             try:
-                result = execute_agent_tool(name, dict(args))
+                result = execute_agent_tool(name, dict(args), user_id=user_id)
             except Exception as error:
                 result = {
                     "error": "Tool execution failed: " + repr(error)
@@ -1073,6 +1108,26 @@ def process_message(update_data):
 
         print("Received message. Text present:", bool(text), "media parts:", len(media_parts), flush=True)
 
+        command = text.strip().split()
+        if command and command[0].split("@")[0] in ("/approve", "/cancel"):
+            if not is_platform_user(user_id):
+                send_telegram_message(chat_id, "Platform actions are disabled for this account. The bot owner must configure TELEGRAM_OWNER_IDS first.")
+                return
+            if len(command) != 2 or not re.fullmatch(r"[A-Fa-f0-9]{8}", command[1]):
+                send_telegram_message(chat_id, "Use /approve ACTION_ID or /cancel ACTION_ID with the 8-character ID shown by the bot.")
+                return
+            action_id = command[1].upper()
+            if command[0].split("@")[0] == "/cancel":
+                cancelled = cancel_action(DATABASE_URL, user_id, action_id)
+                send_telegram_message(chat_id, "Action " + action_id + " cancelled." if cancelled else "No pending action with that ID belongs to you.")
+                return
+            outcome = execute_approved_action(DATABASE_URL, user_id, action_id)
+            if outcome.get("ok"):
+                send_telegram_message(chat_id, "Action " + action_id + " completed. Verified API result: " + str(outcome.get("result", {}))[:3000])
+            else:
+                send_telegram_message(chat_id, "Action " + action_id + " was not completed: " + str(outcome.get("error") or outcome.get("message") or "unknown error")[:1500])
+            return
+
         if text.startswith("/start"):
             send_telegram_message(
                 chat_id,
@@ -1103,7 +1158,7 @@ def process_message(update_data):
             prompt += "\nAttachment notes:\n" + "\n".join(media_notes)
 
         print("Starting Gemini agent...", flush=True)
-        reply = run_agent(prompt, media_parts=media_parts)
+        reply = run_agent(prompt, media_parts=media_parts, user_id=user_id)
         print("Gemini agent completed.", flush=True)
 
         reply = clean_telegram_text(reply)
