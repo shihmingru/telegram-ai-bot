@@ -15,7 +15,7 @@ from google.genai import types
 
 from platform_tools import (
     cancel_action, execute_approved_action, execute_platform_tool,
-    platform_tool_declarations, queue_action,
+    platform_tool_declarations, queue_action, is_allowed_telegram_user,
 )
 
 
@@ -634,10 +634,7 @@ def configure_webhook():
 
 
 def is_platform_user(user_id):
-    """Fail closed unless Telegram user ID is explicitly allowlisted."""
-    configured = os.getenv("TELEGRAM_OWNER_IDS", "")
-    allowed = {item.strip() for item in configured.split(",") if item.strip()}
-    return bool(allowed) and str(user_id) in allowed
+    return is_allowed_telegram_user(user_id)
 
 
 def build_agent_tools(user_id=None):
