@@ -148,20 +148,23 @@ def execute_approved_action(database_url, user_id, action_id):
     with psycopg.connect(database_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """SELECT tool_name, arguments, status FROM agent_pending_actions
-                   WHERE action_id=%s AND user_id=%s""",
+                """UPDATE agent_pending_actions
+                   SET status='executing'
+                   WHERE action_id=%s AND user_id=%s AND status='pending'
+                   RETURNING tool_name, arguments""",
                 (action_id.upper(), str(user_id)),
             )
             row = cur.fetchone()
             if not row:
-                return {"ok": False, "message": "No pending action with that ID belongs to your account."}
-            tool_name, arguments, status = row
-            if status != "pending":
-                return {"ok": False, "message": f"This action is already {status}."}
-            cur.execute(
-                "UPDATE agent_pending_actions SET status='executing' WHERE action_id=%s AND status='pending'",
-                (action_id.upper(),),
-            )
+                cur.execute(
+                    "SELECT status FROM agent_pending_actions WHERE action_id=%s AND user_id=%s",
+                    (action_id.upper(), str(user_id)),
+                )
+                existing = cur.fetchone()
+                if not existing:
+                    return {"ok": False, "message": "No pending action with that ID belongs to your account."}
+                return {"ok": False, "message": f"This action is already {existing[0]}."}
+            tool_name, arguments = row
         conn.commit()
     try:
         result = execute_platform_tool(tool_name, dict(arguments), allow_mutation=True)
