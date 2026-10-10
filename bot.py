@@ -4,7 +4,8 @@ import mimetypes
 import threading
 import re
 from html.parser import HTMLParser
-from urllib.parse import parse_qs, unquote, urljoin, urlparse
+from urllib.parse import parse_qs, quote_plus, unquote, urljoin, urlparse
+import xml.etree.ElementTree as ET
 
 import requests
 from flask import Flask, request
@@ -447,6 +448,42 @@ def free_web_search(query, max_results=5):
                 provider + " web search failed: " + repr(error),
                 flush=True,
             )
+
+    if not results:
+        # Google News RSS is a no-key fallback that can still retrieve current
+        # news when search-engine HTML pages block cloud-hosted requests.
+        rss_url = (
+            "https://news.google.com/rss/search?q=" + quote_plus(query)
+            + "&hl=en-US&gl=US&ceid=US:en"
+        )
+        try:
+            response = requests.get(
+                rss_url,
+                headers=headers,
+                timeout=10,
+            )
+            response.raise_for_status()
+            root = ET.fromstring(response.content)
+            for item in root.findall("./channel/item")[:max_results]:
+                title = (item.findtext("title") or "").strip()
+                url = (item.findtext("link") or "").strip()
+                snippet = _clean_html_text(item.findtext("description") or "")
+                published = (item.findtext("pubDate") or "").strip()
+                if title and url and url not in seen:
+                    seen.add(url)
+                    results.append({
+                        "title": title,
+                        "url": url,
+                        "snippet": snippet[:500],
+                        "published": published,
+                        "source": "Google News RSS",
+                    })
+            print(
+                "Google News RSS returned " + str(len(results)) + " results.",
+                flush=True,
+            )
+        except Exception as error:
+            print("Google News RSS fallback failed: " + repr(error), flush=True)
 
     if not results:
         print("Free web search returned 0 results.", flush=True)
