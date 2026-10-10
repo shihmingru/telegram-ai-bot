@@ -19,6 +19,11 @@ from platform_tools import (
 )
 from agent_features import (add_memory, list_memories, forget_memory, memory_context, add_task, list_tasks, complete_task, add_reminder, due_reminders, skill_for)
 from safe_web import safe_get
+from reverse_image_fallback import (
+    is_reverse_image_search_request,
+    has_image_attachment,
+    reverse_image_search_response,
+)
 
 
 PORT = int(os.environ.get("PORT", "10000"))  # Render web service
@@ -1010,6 +1015,15 @@ def process_message(update_data):
 
         chat_id = chat.get("id")
         user_id = user.get("id")
+        # Reverse-image requests use a transparent, free manual handoff only.
+        # No image is uploaded to a third-party search service by this bot.
+        if is_reverse_image_search_request(text):
+            send_telegram_message(
+                chat_id,
+                reverse_image_search_response(has_image_attachment(message)),
+            )
+            return
+
         media_parts, media_notes, reverse_image_bytes = get_telegram_media_parts(message)
 
         if not media_parts and media_notes and not text:
@@ -1153,8 +1167,6 @@ def process_message(update_data):
             prompt += "\n\nCoaching skill guidance:\n" + selected_skill
         if media_notes:
             prompt += "\nAttachment notes:\n" + "\n".join(media_notes)
-
-        # Reverse-image search is disabled in strict zero-additional-spend mode.
 
         print("Starting Gemini agent...", flush=True)
         reply = run_agent(prompt, media_parts=media_parts, user_id=(user_id if chat.get("type") == "private" else None))
