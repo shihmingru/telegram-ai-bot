@@ -486,6 +486,45 @@ def free_web_search(query, max_results=5):
             print("Google News RSS fallback failed: " + repr(error), flush=True)
 
     if not results:
+        # MediaWiki's public search API is a free, no-key fallback for general
+        # reference queries when HTML search engines block cloud-hosted traffic.
+        try:
+            response = requests.get(
+                "https://en.wikipedia.org/w/api.php",
+                params={
+                    "action": "query",
+                    "list": "search",
+                    "srsearch": query,
+                    "format": "json",
+                    "srlimit": max_results,
+                },
+                headers=headers,
+                timeout=10,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            for item in payload.get("query", {}).get("search", []):
+                title = (item.get("title") or "").strip()
+                snippet = _clean_html_text(item.get("snippet") or "")
+                if not title:
+                    continue
+                url = "https://en.wikipedia.org/wiki/" + quote_plus(title.replace(" ", "_"))
+                if url not in seen:
+                    seen.add(url)
+                    results.append({
+                        "title": title,
+                        "url": url,
+                        "snippet": snippet[:500],
+                        "source": "Wikipedia search",
+                    })
+            print(
+                "Wikipedia API fallback returned " + str(len(results)) + " results.",
+                flush=True,
+            )
+        except Exception as error:
+            print("Wikipedia API fallback failed: " + repr(error), flush=True)
+
+    if not results:
         print("Free web search returned 0 results.", flush=True)
         return []
 
