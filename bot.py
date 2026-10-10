@@ -229,50 +229,80 @@ def _clean_html_text(html):
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _extract_generic_search_results(html, provider, max_results=10):
-    """Extract ordinary external links from public search-result HTML."""
+def _extract_generic_search_results(html, provider, max_results=10, base_url=None):
+    """Extract external links from search HTML, including relative result URLs."""
     results = []
     seen = set()
-
-    pattern = re.compile(
-        r'<a\\b[^>]*href=["\\\']([^"\\\']+)["\\\'][^>]*>(.*?)</a>',
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-
     blocked_hosts = {
-        "google.com", "www.google.com", "bing.com", "www.bing.com",
-        "duckduckgo.com", "www.duckduckgo.com",
+        "google.com", "bing.com", "duckduckgo.com", "yahoo.com", "mojeek.com",
+        "search.yahoo.com",
     }
 
-    for href, title_html in pattern.findall(html):
-        url = unquote(href).strip()
-        title = _clean_html_text(title_html)
+    class AnchorParser(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=True)
+            self.items = []
+            self.href = None
+            self.parts = []
+            self.depth = 0
 
+        def handle_starttag(self, tag, attrs):
+            if tag == "a" and self.href is None:
+                href = dict(attrs).get("href")
+                if href:
+                    self.href = href
+                    self.parts = []
+                    self.depth = 1
+            elif self.href is not None and tag not in ("br", "img", "input"):
+                self.depth += 1
+
+        def handle_data(self, data):
+            if self.href is not None:
+                self.parts.append(data)
+
+        def handle_endtag(self, tag):
+            if self.href is None:
+                return
+            if tag == "a":
+                self.items.append((self.href, " ".join(" ".join(self.parts).split())))
+                self.href = None
+                self.parts = []
+                self.depth = 0
+            elif self.depth:
+                self.depth -= 1
+
+    parser = AnchorParser()
+    parser.feed(html)
+    for href, title in parser.items:
+        url = urljoin(base_url or "", href).strip()
         if url.startswith("//"):
             url = "https:" + url
-
-        if not url.startswith(("http://", "https://")):
-            continue
-
         parsed = urlparse(url)
         host = (parsed.hostname or "").lower()
+
+        # Unwrap common Google redirect links when they carry a destination.
+        if host in {"google.com", "www.google.com"} and parsed.path == "/url":
+            target = parse_qs(parsed.query).get("q", [None])[0]
+            if target:
+                url = target
+                parsed = urlparse(url)
+                host = (parsed.hostname or "").lower()
+
+        if parsed.scheme not in {"http", "https"} or not host:
+            continue
         if any(host == blocked or host.endswith("." + blocked) for blocked in blocked_hosts):
             continue
-
         if not title or len(title) < 3 or url in seen:
             continue
 
         seen.add(url)
         results.append({"title": title[:300], "url": url, "snippet": ""})
-
         if len(results) >= max_results:
             break
 
     print(
-        provider + " generic extractor found "
-        + str(len(results))
-        + " external links.",
-        flush=True,
+        provider + " generic extractor found " + str(len(results))
+        + " external links.", flush=True,
     )
     return results
 
