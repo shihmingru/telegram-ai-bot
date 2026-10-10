@@ -5,7 +5,7 @@ This configuration is designed to avoid intentionally enabling paid services, bu
 ## Cost controls
 
 - Set GEMINI_MODEL to one model verified as free-tier eligible for your exact Gemini API key and region. The bot uses only that model and does not silently try alternatives if it fails or exhausts quota.
-- Reverse-image search via Google Cloud Vision is disabled in the Telegram processing path. Do not add GOOGLE_CLOUD_VISION_API_KEY while operating under a strict $0 budget.
+- Automatic reverse-image matching is not available in the Telegram bot because no provider has been verified as both reliable and guaranteed free. When the user explicitly asks for reverse-image search, the bot provides Google Lens and Bing Visual Search links for the user to open and upload the image manually. The bot does not forward the image to those sites or call an image-search API. Do not add GOOGLE_CLOUD_VISION_API_KEY while operating under a strict $0 budget.
 - No new Render services, databases, disks, workers, or paid schedulers are created.
 - The web service remains configured on its existing Render plan. Check the Render dashboard for any changes to plan or billing.
 - No arbitrary code execution or paid external research service is added.
