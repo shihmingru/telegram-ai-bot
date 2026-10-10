@@ -35,5 +35,41 @@ class SkillTests(unittest.TestCase):
         self.assertIn('Buddhist Studies', skill_for('Buddhist Studies research'))
         self.assertEqual(skill_for('unknown skill'), '')
 
+
+from reverse_image_fallback import (
+    GOOGLE_LENS_URL,
+    BING_VISUAL_SEARCH_URL,
+    has_image_attachment,
+    is_reverse_image_search_request,
+    reverse_image_search_response,
+)
+
+class ReverseImageFallbackTests(unittest.TestCase):
+    def test_detects_explicit_reverse_image_requests(self):
+        self.assertTrue(is_reverse_image_search_request("Please do a reverse image search"))
+        self.assertTrue(is_reverse_image_search_request("/reverseimage"))
+        self.assertFalse(is_reverse_image_search_request("What breed is this cat?"))
+        self.assertFalse(is_reverse_image_search_request(""))
+
+    def test_detects_photo_and_image_documents(self):
+        self.assertTrue(has_image_attachment({"photo": [{"file_id": "x"}]}))
+        self.assertTrue(has_image_attachment({"document": {"mime_type": "image/png"}}))
+        self.assertTrue(has_image_attachment({"document": {"file_name": "cat.webp"}}))
+        self.assertFalse(has_image_attachment({"document": {"mime_type": "application/pdf", "file_name": "doc.pdf"}}))
+
+    def test_response_is_honest_and_offers_manual_links(self):
+        response = reverse_image_search_response(True)
+        self.assertIn(GOOGLE_LENS_URL, response)
+        self.assertIn(BING_VISUAL_SEARCH_URL, response)
+        self.assertIn("upload the image yourself", response)
+        self.assertIn("not forwarded", response)
+        self.assertIn("can’t run an automatic", response)
+
+    def test_missing_image_prompts_upload(self):
+        response = reverse_image_search_response(False)
+        self.assertIn("/reverseimage", response)
+        self.assertIn(GOOGLE_LENS_URL, response)
+
+
 if __name__ == '__main__':
     unittest.main()
