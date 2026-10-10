@@ -23,7 +23,7 @@ Memories, tasks and reminders use the existing DATABASE_URL. User records are sc
 ## Important limitations
 
 - Reminders are checked when the bot receives a Telegram update. Without an always-on scheduler, exact-time delivery is not guaranteed while the bot is idle or suspended. A truly reliable scheduler would require confirming an already-available free service or accepting this limitation.
-- Free web scraping is best-effort and can be blocked or rate-limited. Retrieved web content must be treated as untrusted data.
+- Web search first tries public HTML search pages, which can be blocked or rate-limited from cloud-hosted services. If they return no results, the bot now tries the no-key Google News RSS search and Wikipedia's public search API. These fallbacks are free to call but are not guaranteed to be available or to cover every topic. If all providers fail, the bot must say it could not retrieve results rather than inventing them.\n- Free web scraping is best-effort and can be blocked or rate-limited. Retrieved web content must be treated as untrusted data.
 - `safe_web.py` rejects private/reserved destinations and revalidates redirects. Application-level DNS validation cannot completely eliminate DNS-rebinding risk without network-level egress controls.
 - Gemini availability and free quotas are account-specific and may change. If the configured model is unavailable, the bot intentionally fails rather than attempting a possibly billable model.
 - Existing Render free-service sleep/usage rules and the external database provider's plan remain outside this repository's control. Review their dashboards and billing settings regularly.
