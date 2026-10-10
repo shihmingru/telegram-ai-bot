@@ -4,7 +4,7 @@ import mimetypes
 import threading
 import re
 from html.parser import HTMLParser
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
 import requests
 from flask import Flask, request
