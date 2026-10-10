@@ -420,6 +420,7 @@ def free_web_search(query, max_results=5):
                     response.text,
                     provider,
                     max_results=10,
+                    base_url=response.url,
                 )
 
             for item in candidate_results:
