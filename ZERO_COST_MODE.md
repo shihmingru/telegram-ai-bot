@@ -20,6 +20,32 @@ This configuration is designed to avoid intentionally enabling paid services, bu
 
 Memories, tasks and reminders use the existing DATABASE_URL. User records are scoped by Telegram user ID.
 
+## User-defined recurring tasks
+
+The Telegram bot supports these commands in a private chat:
+
+- `/schedule daily at 08:00 | your request`
+- `/schedule weekly at 09:30 | your request`
+- Add a timezone before the separator when needed, for example `/schedule daily at 08:00 [Europe/Paris] | your request`
+- `/schedules` lists active schedules.
+- `/unschedule ID` cancels a schedule.
+
+Requests are stored in the existing PostgreSQL database. The `.github/workflows/scheduled-tasks.yml` GitHub Actions workflow checks for due tasks every 15 minutes and can also be run manually from the Actions tab. Scheduled starts can be delayed by GitHub; this is not an exact-time guarantee.
+
+### One-time GitHub Actions setup required
+
+In the repository's Settings → Secrets and variables → Actions, add these repository secrets using the same existing credentials used by the bot:
+
+- `DATABASE_URL`: the existing PostgreSQL connection string.
+- `TELEGRAM_TOKEN`: the existing Telegram bot token.
+- `GEMINI_API_KEY`: the existing Gemini API key.
+
+Optionally add a repository variable named `GEMINI_MODEL` with the same model configured for the live bot. If omitted, the worker uses `gemini-2.5-flash-lite`. Confirm this model is eligible for the user's current free quota before relying on it.
+
+Do not paste secrets into chat, source files, workflow YAML, or logs. The bot can save schedules before Actions is configured, but they will not execute automatically until the workflow is enabled and all three secrets are set. After setup, use Actions → Recurring Telegram tasks → Run workflow to test it. The workflow does not create Render services or databases and does not add paid providers.
+
+The worker supports general user-authored recurring prompts. For requests that appear to need current information, it attempts free Google News RSS retrieval and then Wikipedia search. These sources are best-effort and are not a universal web search engine; the worker must disclose missing live results. Gemini execution still depends on the existing API key's available quota. No paid fallback is attempted.
+
 ## Important limitations
 
 - Reminders are checked when the bot receives a Telegram update. Without an always-on scheduler, exact-time delivery is not guaranteed while the bot is idle or suspended. A truly reliable scheduler would require confirming an already-available free service or accepting this limitation.
