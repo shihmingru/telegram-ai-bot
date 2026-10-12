@@ -29,40 +29,71 @@ def ensure_schedule_table(db):
 
 
 def parse_schedule_text(text):
-    """Parse /schedule daily at 08:00 | request, or weekly at 09:30 | request."""
-    match = re.match(
-        r"^\s*(daily|weekly)\s+at\s+(\d{1,2}:\d{2})(?:\s+\[([A-Za-z_/-]+)\])?\s*\|\s*(.+?)\s*$",
-        text or "", re.IGNORECASE
+    """Accept a structured schedule or a natural-language recurring request."""
+    source = (text or "").strip()
+    structured = re.match(
+        r"^\\s*(daily|weekly)\\s+at\\s+(\\d{1,2}:\\d{2})(?:\\s+\\[([A-Za-z_/-]+)\\])?\\s*\\|\\s*(.+?)\\s*$",
+        source, re.IGNORECASE
     )
-    if not match:
-        raise ValueError(
-            "Use /schedule daily at 08:00 | your task, or /schedule weekly at 09:30 | your task. "
-            "Times default to Taiwan time. To choose a timezone, add it in square brackets before |, "
-            "for example /schedule daily at 08:00 [Europe/Paris] | your task."
+    if structured:
+        frequency, clock, timezone, request = structured.groups()
+        hour, minute = map(int, clock.split(":"))
+        if hour > 23 or minute > 59:
+            raise ValueError("Use a valid 24-hour time, such as 08:00 or 19:30.")
+        timezone = timezone or DEFAULT_TZ
+    else:
+        # Examples accepted:
+        # "Every day at 8am, send me the latest AI headlines"
+        # "Send me a daily summary at 08:30"
+        # "Every week at 09:00 [Europe/Paris], review my study plan"
+        frequency_match = re.search(
+            r"\\b(every\\s+day|each\\s+day|daily|every\\s+morning|every\\s+evening|every\\s+week|weekly)\\b",
+            source, re.IGNORECASE
         )
-    frequency, clock, timezone, request = match.groups()
-    hour, minute = map(int, clock.split(":"))
-    if hour > 23 or minute > 59:
-        raise ValueError("Use a valid 24-hour time, such as 08:00 or 19:30.")
-    timezone = timezone or DEFAULT_TZ
+        time_match = re.search(
+            r"\\b(?:at\\s*)?(?:(2[0-3]|[01]?\\d):([0-5]\\d)|([1-9]|1[0-2])(?::([0-5]\\d))?\\s*(am|pm))\\b",
+            source, re.IGNORECASE
+        )
+        if not frequency_match or not time_match:
+            raise ValueError(
+                "Please describe a recurring request and time, for example: "
+                "/schedule Every day at 8am, send me the latest AI headlines. "
+                "Times default to Taiwan time. You can add [Europe/Paris] to choose a timezone."
+            )
+        frequency_phrase = frequency_match.group(1).lower()
+        frequency = "weekly" if ("week" in frequency_phrase) else "daily"
+        if time_match.group(1) is not None:
+            hour, minute = int(time_match.group(1)), int(time_match.group(2))
+        else:
+            hour, minute = int(time_match.group(3)), int(time_match.group(4) or 0)
+            if time_match.group(5).lower() == "pm" and hour != 12:
+                hour += 12
+            elif time_match.group(5).lower() == "am" and hour == 12:
+                hour = 0
+        clock = f"{hour:02d}:{minute:02d}"
+        tz_match = re.search(r"\\[([A-Za-z_/-]+)\\]", source)
+        timezone = tz_match.group(1) if tz_match else DEFAULT_TZ
+        # Remove scheduling metadata, retaining the actual task request.
+        request = source
+        for match in sorted([frequency_match, time_match] + ([tz_match] if tz_match else []),
+                            key=lambda m: m.start(), reverse=True):
+            request = request[:match.start()] + " " + request[match.end():]
+        request = re.sub(r"^[\\s,;:.-]+|[\\s,;:.-]+$", "", request)
+        request = re.sub(r"(?i)^please\\s+", "", request).strip()
+        request = re.sub(r"(?i)^(?:and\\s+)?(?:then\\s+)?", "", request).strip()
+        if not request:
+            raise ValueError("Please include what you want the bot to do in each run.")
     try:
         zone = ZoneInfo(timezone)
     except Exception as exc:
         raise ValueError("That timezone is not recognized. Use a name such as Asia/Taipei or Europe/Paris.") from exc
-    if len(request) > 1500:
-        raise ValueError("Keep the scheduled request under 1500 characters.")
+    if not request or len(request) > 1500:
+        raise ValueError("Please include a task request of 1 to 1500 characters.")
     now = datetime.now(zone)
     due = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
     if due <= now:
-        due += timedelta(days=1 if frequency.lower() == "daily" else 7)
-    if frequency.lower() == "weekly" and due <= now:
-        due += timedelta(days=7)
-    # If the selected weekly time is later today, the first run should be today,
-    # then every seven days. Otherwise the calculation above chooses next week.
-    if frequency.lower() == "weekly" and due.date() == now.date() and due <= now:
-        due += timedelta(days=7)
-    return frequency.lower(), f"{hour:02d}:{minute:02d}", timezone, request, due
-
+        due += timedelta(days=1 if frequency == "daily" else 7)
+    return frequency, f"{hour:02d}:{minute:02d}", timezone, request, due
 
 def add_schedule(db, user_id, chat_id, text):
     frequency, clock, timezone, request, due = parse_schedule_text(text)
