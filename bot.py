@@ -19,6 +19,7 @@ from platform_tools import (
     platform_tool_declarations, queue_action, is_allowed_telegram_user,
 )
 from agent_features import (add_memory, list_memories, forget_memory, memory_context, add_task, list_tasks, complete_task, add_reminder, due_reminders, skill_for)
+from scheduled_tasks import add_schedule, list_schedules, cancel_schedule
 from safe_web import safe_get
 from reverse_image_fallback import (
     is_reverse_image_search_request,
@@ -1152,7 +1153,7 @@ def process_message(update_data):
         print("Received message. Text present:", bool(text), "media parts:", len(media_parts), flush=True)
 
         command = text.strip().split()
-        personal_commands = {"/remember", "/memories", "/forget", "/task", "/tasks", "/done", "/remind"}
+        personal_commands = {"/remember", "/memories", "/forget", "/task", "/tasks", "/done", "/remind", "/schedule", "/schedules", "/unschedule"}
         if command and command[0].split("@")[0] in personal_commands and chat.get("type") != "private":
             send_telegram_message(chat_id, "For privacy, use personal memory, task, and reminder commands in a private chat with the bot.")
             return
@@ -1205,6 +1206,58 @@ def process_message(update_data):
                     send_telegram_message(chat_id, "Saved reminder #" + str(ident) + ". Delivery is not guaranteed while the service is idle or suspended.")
                 except Exception as error:
                     send_telegram_message(chat_id, "I could not save that reminder: " + str(error))
+            return
+        if command and command[0].split("@")[0] == "/schedule":
+            if chat.get("type") != "private":
+                send_telegram_message(chat_id, "For privacy, manage recurring tasks in a private chat with the bot.")
+                return
+            payload = text.partition(" ")[2].strip()
+            if not payload:
+                send_telegram_message(
+                    chat_id,
+                    "Create a recurring task with /schedule daily at 08:00 | your request, or /schedule weekly at 09:30 | your request. Times default to Taiwan time. You can include a timezone like [Europe/Paris]. Use /schedules to list tasks and /unschedule ID to cancel one. GitHub Actions may run a little late."
+                )
+                return
+            try:
+                ident, frequency, clock, timezone, request_text, due = add_schedule(
+                    DATABASE_URL, user_id, chat_id, payload
+                )
+                send_telegram_message(
+                    chat_id,
+                    "Saved recurring task #" + str(ident) + " (" + frequency + ", "
+                    + clock + " " + timezone + "). First run is scheduled for "
+                    + due.strftime("%Y-%m-%d %H:%M %Z")
+                    + ". Delivery depends on GitHub Actions being enabled and the repository secrets being configured. Use /schedules to review or /unschedule "
+                    + str(ident) + " to cancel."
+                )
+            except Exception as error:
+                send_telegram_message(chat_id, "I could not save that schedule: " + str(error))
+            return
+        if command and command[0].split("@")[0] == "/schedules":
+            if chat.get("type") != "private":
+                send_telegram_message(chat_id, "For privacy, manage recurring tasks in a private chat with the bot.")
+                return
+            try:
+                rows = list_schedules(DATABASE_URL, user_id)
+                if not rows:
+                    send_telegram_message(chat_id, "You have no active recurring tasks. Add one with /schedule daily at 08:00 | your request.")
+                else:
+                    lines = [
+                        "#" + str(ident) + " [" + frequency + "] " + local_time + " " + timezone
+                        + "\\nNext run: " + next_run.strftime("%Y-%m-%d %H:%M %Z")
+                        + "\\n" + request_text
+                        for ident, request_text, frequency, local_time, timezone, next_run in rows
+                    ]
+                    send_telegram_message(chat_id, "Your recurring tasks:\\n\\n" + "\\n\\n".join(lines) + "\\n\\nCancel one with /unschedule ID.")
+            except Exception as error:
+                send_telegram_message(chat_id, "I could not list your schedules: " + str(error))
+            return
+        if command and command[0].split("@")[0] == "/unschedule":
+            if chat.get("type") != "private":
+                send_telegram_message(chat_id, "For privacy, manage recurring tasks in a private chat with the bot.")
+                return
+            removed = len(command) == 2 and command[1].isdigit() and cancel_schedule(DATABASE_URL, user_id, command[1])
+            send_telegram_message(chat_id, "Recurring task cancelled." if removed else "No active recurring task with that ID belongs to you. Use /schedules to review your tasks.")
             return
         if command and command[0].split("@")[0] == "/skill":
             skill_prompt = skill_for(text.partition(" ")[2].strip())
