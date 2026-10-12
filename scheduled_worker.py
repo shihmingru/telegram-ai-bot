@@ -10,7 +10,7 @@ from google.genai import types
 DB = os.environ["DATABASE_URL"]
 TOKEN = os.environ["TELEGRAM_TOKEN"]
 KEY = os.environ["GEMINI_API_KEY"]
-MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash-lite").strip()
+MODEL = os.environ.get("GEMINI_MODEL", "").strip() or "gemini-2.5-flash-lite"
 client = genai.Client(api_key=KEY)
 
 
@@ -101,8 +101,8 @@ def main():
             FROM agent_schedules
             WHERE enabled=TRUE AND next_run <= NOW()
             ORDER BY next_run
-            FOR UPDATE SKIP LOCKED
             LIMIT 20
+            FOR UPDATE SKIP LOCKED
         """)
         rows = cur.fetchall()
         for ident, user_id, chat_id, request, frequency, local_time, timezone in rows:
