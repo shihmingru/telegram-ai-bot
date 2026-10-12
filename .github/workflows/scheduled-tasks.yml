@@ -26,8 +26,12 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ENABLE_RECURRING_TASKS: ${{ vars.ENABLE_RECURRING_TASKS }}
         run: |
-          if [ -z "$DATABASE_URL" ] || [ -z "$TELEGRAM_TOKEN" ] || [ -z "$GEMINI_API_KEY" ]; then
+          if [ "$ENABLE_RECURRING_TASKS" != "true" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "Recurring-task worker skipped: set repository Actions variable ENABLE_RECURRING_TASKS=true only after confirming the Gemini project is on the Free Tier with billing disabled."
+          elif [ -z "$DATABASE_URL" ] || [ -z "$TELEGRAM_TOKEN" ] || [ -z "$GEMINI_API_KEY" ]; then
             echo "ready=false" >> "$GITHUB_OUTPUT"
             echo "Recurring-task worker skipped: configure DATABASE_URL, TELEGRAM_TOKEN, and GEMINI_API_KEY in repository Actions secrets."
           else
