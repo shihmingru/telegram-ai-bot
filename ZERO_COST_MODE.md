@@ -30,7 +30,7 @@ The Telegram bot supports these commands in a private chat:
 - `/schedules` lists active schedules.
 - `/unschedule ID` cancels a schedule.
 
-Requests are stored in the existing PostgreSQL database. The `.github/workflows/scheduled-tasks.yml` GitHub Actions workflow checks for due tasks every 15 minutes and can also be run manually from the Actions tab. Scheduled starts can be delayed by GitHub; this is not an exact-time guarantee.
+Requests are stored in the existing PostgreSQL database. The `.github/workflows/scheduled-tasks.yml` GitHub Actions workflow checks for due tasks every 15 minutes and can also be run manually from the Actions tab. It will skip the worker unless the repository Actions variable `ENABLE_RECURRING_TASKS` is exactly `true`. Set this only after confirming that the Gemini API key belongs to a Free Tier project with billing disabled. Scheduled starts can be delayed by GitHub; this is not an exact-time guarantee.
 
 ### One-time GitHub Actions setup required
 
@@ -40,9 +40,9 @@ In the repository's Settings → Secrets and variables → Actions, add these re
 - `TELEGRAM_TOKEN`: the existing Telegram bot token.
 - `GEMINI_API_KEY`: the existing Gemini API key.
 
-Optionally add a repository variable named `GEMINI_MODEL` with the same model configured for the live bot. If omitted, the worker uses `gemini-2.5-flash-lite`. Confirm this model is eligible for the user's current free quota before relying on it.
+Add repository variable `ENABLE_RECURRING_TASKS` set to `true` only after confirming the Gemini project is on the Free Tier with billing disabled. Optionally add `GEMINI_MODEL` with a model available on that Free Tier. If omitted, the worker uses `gemini-2.5-flash-lite`; confirm its availability for the exact project before enabling automation.
 
-Do not paste secrets into chat, source files, workflow YAML, or logs. The bot can save schedules before Actions is configured, but they will not execute automatically until the workflow is enabled and all three secrets are set. After setup, use Actions → Recurring Telegram tasks → Run workflow to test it. The workflow does not create Render services or databases and does not add paid providers.
+Do not paste secrets into chat, source files, workflow YAML, or logs. The bot can save schedules before Actions is configured, but they will not execute automatically until the workflow is enabled, all three secrets are set, and `ENABLE_RECURRING_TASKS=true`. After setup, use Actions → Recurring Telegram tasks → Run workflow to test it. The workflow does not create Render services or databases and does not add paid providers.
 
 The worker supports general user-authored recurring prompts, so the topic does not need to be hard-coded in the source. It is designed for tasks that can return a text result to Telegram, such as summaries, research briefs, study prompts, and reminders. It does not yet perform arbitrary external actions such as booking, purchasing, or changing calendar entries. For requests that appear to need current information, it attempts free Google News RSS retrieval and then Wikipedia search. These sources are best-effort and are not a universal web search engine; the worker must disclose missing live results. Gemini execution still depends on the existing API key's available quota. No paid fallback is attempted.
 
