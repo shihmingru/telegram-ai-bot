@@ -1215,7 +1215,7 @@ def process_message(update_data):
             if not payload:
                 send_telegram_message(
                     chat_id,
-                    "Create a recurring task with /schedule daily at 08:00 | your request, or /schedule weekly at 09:30 | your request. Times default to Taiwan time. You can include a timezone like [Europe/Paris]. Use /schedules to list tasks and /unschedule ID to cancel one. GitHub Actions may run a little late."
+                    "Describe what you want and when, for example /schedule Every day at 8am, send me the latest AI headlines. You can also use /schedule daily at 08:00 | your request. Times default to Taiwan time; add [Europe/Paris] to choose another timezone. Use /schedules to list tasks and /unschedule ID to cancel one. GitHub Actions may run a little late."
                 )
                 return
             try:
@@ -1259,6 +1259,32 @@ def process_message(update_data):
             removed = len(command) == 2 and command[1].isdigit() and cancel_schedule(DATABASE_URL, user_id, command[1])
             send_telegram_message(chat_id, "Recurring task cancelled." if removed else "No active recurring task with that ID belongs to you. Use /schedules to review your tasks.")
             return
+        # Save clear natural-language recurring requests without requiring source-code edits.
+        if (
+            text
+            and not text.strip().startswith("/")
+            and re.search(r"\\b(every\\s+day|each\\s+day|daily\\s+at|every\\s+morning|every\\s+evening|every\\s+week|weekly\\s+at)\\b", text, re.IGNORECASE)
+            and re.search(r"\\b(?:at\\s*)?(?:2[0-3]|[01]?\\d):[0-5]\\d\\b|\\b(?:at\\s*)?(?:[1-9]|1[0-2])(?::[0-5]\\d)?\\s*(?:am|pm)\\b", text, re.IGNORECASE)
+        ):
+            if chat.get("type") != "private":
+                send_telegram_message(chat_id, "For privacy, create recurring tasks in a private chat with the bot.")
+                return
+            try:
+                ident, frequency, clock, timezone, request_text, due = add_schedule(
+                    DATABASE_URL, user_id, chat_id, text
+                )
+                send_telegram_message(
+                    chat_id,
+                    "I saved that recurring request as task #" + str(ident) + " (" + frequency + ", "
+                    + clock + " " + timezone + "). First run: "
+                    + due.strftime("%Y-%m-%d %H:%M %Z")
+                    + ". Use /schedules to review it or /unschedule " + str(ident) + " to cancel. "
+                    + "Automatic delivery requires GitHub Actions setup in the repository."
+                )
+            except Exception as error:
+                send_telegram_message(chat_id, "I recognized a recurring request but could not save it: " + str(error))
+            return
+
         if command and command[0].split("@")[0] == "/skill":
             skill_prompt = skill_for(text.partition(" ")[2].strip())
             if skill_prompt:
