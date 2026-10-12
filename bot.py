@@ -1322,7 +1322,7 @@ def process_message(update_data):
         if text.startswith("/start"):
             send_telegram_message(
                 chat_id,
-                "Hello! Send text, photos, voice messages, audio, videos, links, or supported documents. Commands: /remember TEXT, /memories, /forget ID, /task TEXT, /tasks, /done ID, /remind YYYY-MM-DD HH:MM | TEXT, /skill NAME.",
+                "Hello! Send text, photos, voice messages, audio, videos, links, or supported documents. Commands include /remember TEXT, /memories, /forget ID, /task TEXT, /tasks, /done ID, /remind YYYY-MM-DD HH:MM | TEXT, /schedule REQUEST, /schedules, /unschedule ID, and /skill NAME. For example: /schedule Every day at 8am, send me the latest AI headlines.",
             )
             return
 
