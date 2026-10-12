@@ -1263,8 +1263,8 @@ def process_message(update_data):
         if (
             text
             and not text.strip().startswith("/")
-            and re.search(r"\\b(every\\s+day|each\\s+day|daily\\s+at|every\\s+morning|every\\s+evening|every\\s+week|weekly\\s+at)\\b", text, re.IGNORECASE)
-            and re.search(r"\\b(?:at\\s*)?(?:2[0-3]|[01]?\\d):[0-5]\\d\\b|\\b(?:at\\s*)?(?:[1-9]|1[0-2])(?::[0-5]\\d)?\\s*(?:am|pm)\\b", text, re.IGNORECASE)
+            and re.search(r"\b(every\s+day|each\s+day|daily\s+at|every\s+morning|every\s+evening|every\s+week|weekly\s+at)\b", text, re.IGNORECASE)
+            and re.search(r"\b(?:at\s*)?(?:2[0-3]|[01]?\d):[0-5]\d\b|\b(?:at\s*)?(?:[1-9]|1[0-2])(?::[0-5]\d)?\s*(?:am|pm)\b", text, re.IGNORECASE)
         ):
             if chat.get("type") != "private":
                 send_telegram_message(chat_id, "For privacy, create recurring tasks in a private chat with the bot.")
