@@ -24,9 +24,9 @@ Memories, tasks and reminders use the existing DATABASE_URL. User records are sc
 
 The Telegram bot supports these commands in a private chat:
 
-- `/schedule daily at 08:00 | your request`
-- `/schedule weekly at 09:30 | your request`
-- Add a timezone before the separator when needed, for example `/schedule daily at 08:00 [Europe/Paris] | your request`
+- Describe a request naturally, for example `/schedule Every day at 8am, send me the latest AI headlines`.
+- Structured form is also available: `/schedule daily at 08:00 | your request` or `/schedule weekly at 09:30 | your request`.
+- Add a timezone when needed, for example `/schedule Every day at 8am [Europe/Paris], send me the latest AI headlines`. Times otherwise default to Taiwan time.
 - `/schedules` lists active schedules.
 - `/unschedule ID` cancels a schedule.
 
@@ -44,7 +44,7 @@ Optionally add a repository variable named `GEMINI_MODEL` with the same model co
 
 Do not paste secrets into chat, source files, workflow YAML, or logs. The bot can save schedules before Actions is configured, but they will not execute automatically until the workflow is enabled and all three secrets are set. After setup, use Actions → Recurring Telegram tasks → Run workflow to test it. The workflow does not create Render services or databases and does not add paid providers.
 
-The worker supports general user-authored recurring prompts. For requests that appear to need current information, it attempts free Google News RSS retrieval and then Wikipedia search. These sources are best-effort and are not a universal web search engine; the worker must disclose missing live results. Gemini execution still depends on the existing API key's available quota. No paid fallback is attempted.
+The worker supports general user-authored recurring prompts, so the topic does not need to be hard-coded in the source. It is designed for tasks that can return a text result to Telegram, such as summaries, research briefs, study prompts, and reminders. It does not yet perform arbitrary external actions such as booking, purchasing, or changing calendar entries. For requests that appear to need current information, it attempts free Google News RSS retrieval and then Wikipedia search. These sources are best-effort and are not a universal web search engine; the worker must disclose missing live results. Gemini execution still depends on the existing API key's available quota. No paid fallback is attempted.
 
 ## Important limitations
 
