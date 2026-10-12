@@ -79,7 +79,7 @@ def parse_schedule_text(text):
                             key=lambda m: m.start(), reverse=True):
             request = request[:match.start()] + " " + request[match.end():]
         request = re.sub(r"^[\\s,;:.-]+|[\\s,;:.-]+$", "", request)
-        request = re.sub(r"(?i)^please\\s+", "", request).strip()
+        request = re.sub(r"(?i)^(?:(?:can|could) you|please|schedule|automate|set up|remind me to|make sure to)\\s+", "", request).strip()
         request = re.sub(r"(?i)^(?:and\\s+)?(?:then\\s+)?", "", request).strip()
         if not request:
             raise ValueError("Please include what you want the bot to do in each run.")
