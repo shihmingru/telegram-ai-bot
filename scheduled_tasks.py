@@ -32,7 +32,7 @@ def parse_schedule_text(text):
     """Accept a structured schedule or a natural-language recurring request."""
     source = (text or "").strip()
     structured = re.match(
-        r"^\\s*(daily|weekly)\\s+at\\s+(\\d{1,2}:\\d{2})(?:\\s+\\[([A-Za-z_/-]+)\\])?\\s*\\|\\s*(.+?)\\s*$",
+        r"^\s*(daily|weekly)\s+at\s+(\d{1,2}:\d{2})(?:\s+\[([A-Za-z_/-]+)\])?\s*\|\s*(.+?)\s*$",
         source, re.IGNORECASE
     )
     if structured:
@@ -47,11 +47,11 @@ def parse_schedule_text(text):
         # "Send me a daily summary at 08:30"
         # "Every week at 09:00 [Europe/Paris], review my study plan"
         frequency_match = re.search(
-            r"\\b(every\\s+day|each\\s+day|daily|every\\s+morning|every\\s+evening|every\\s+week|weekly)\\b",
+            r"\b(every\s+day|each\s+day|daily|every\s+morning|every\s+evening|every\s+week|weekly)\b",
             source, re.IGNORECASE
         )
         time_match = re.search(
-            r"\\b(?:at\\s*)?(?:(2[0-3]|[01]?\\d):([0-5]\\d)|([1-9]|1[0-2])(?::([0-5]\\d))?\\s*(am|pm))\\b",
+            r"\b(?:at\s*)?(?:(2[0-3]|[01]?\d):([0-5]\d)|([1-9]|1[0-2])(?::([0-5]\d))?\s*(am|pm))\b",
             source, re.IGNORECASE
         )
         if not frequency_match or not time_match:
@@ -71,16 +71,16 @@ def parse_schedule_text(text):
             elif time_match.group(5).lower() == "am" and hour == 12:
                 hour = 0
         clock = f"{hour:02d}:{minute:02d}"
-        tz_match = re.search(r"\\[([A-Za-z_/-]+)\\]", source)
+        tz_match = re.search(r"\[([A-Za-z_/-]+)\]", source)
         timezone = tz_match.group(1) if tz_match else DEFAULT_TZ
         # Remove scheduling metadata, retaining the actual task request.
         request = source
         for match in sorted([frequency_match, time_match] + ([tz_match] if tz_match else []),
                             key=lambda m: m.start(), reverse=True):
             request = request[:match.start()] + " " + request[match.end():]
-        request = re.sub(r"^[\\s,;:.-]+|[\\s,;:.-]+$", "", request)
-        request = re.sub(r"(?i)^(?:(?:can|could) you|please|schedule|automate|set up|remind me to|make sure to)\\s+", "", request).strip()
-        request = re.sub(r"(?i)^(?:and\\s+)?(?:then\\s+)?", "", request).strip()
+        request = re.sub(r"^[\s,;:.-]+|[\s,;:.-]+$", "", request)
+        request = re.sub(r"(?i)^(?:(?:can|could) you|please|schedule|automate|set up|remind me to|make sure to)\s+", "", request).strip()
+        request = re.sub(r"(?i)^(?:and\s+)?(?:then\s+)?", "", request).strip()
         if not request:
             raise ValueError("Please include what you want the bot to do in each run.")
     try:
