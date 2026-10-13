@@ -921,7 +921,7 @@ Describe what is actually visible or audible, distinguish observation from infer
 If the user includes a URL, use web_open to inspect it when its contents matter; do not treat a URL as if you have read it.
 You can answer normally when web tools are unnecessary. You may use multiple tool calls when needed, but stop when you have enough evidence.
 """
-    system_instruction += "\\n\\n" + runtime_guidance()
+    system_instruction += "\n\n" + runtime_guidance()
 
     tools = build_agent_tools(user_id)
     initial_parts = [types.Part.from_text(text=prompt)]
