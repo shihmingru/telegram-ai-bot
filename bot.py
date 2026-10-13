@@ -976,7 +976,6 @@ You can answer normally when web tools are unnecessary. You may use multiple too
             # The model receives bounded, JSON-safe tool results only.
 
             # Existing approval handling remains authoritative for external mutations.
-            if False:
             contents.append(
                 types.Content(
                     role="user",
