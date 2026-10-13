@@ -132,3 +132,18 @@ def decide_skill(db: str, user_id: str, ident: int, approve: bool) -> bool:
         )
         conn.commit()
         return True
+
+
+def delete_custom_skill(db: str, name: str) -> bool:
+    """Delete one custom skill by exact normalized name; built-ins are protected."""
+    key = " ".join((name or "").lower().split())
+    if not key:
+        raise ValueError("Provide the exact custom skill name.")
+    if key in BUILTIN_SKILLS:
+        raise ValueError("Built-in skills cannot be deleted.")
+    ensure_skill_tables(db)
+    with psycopg.connect(db) as conn, conn.cursor() as cur:
+        cur.execute("DELETE FROM agent_custom_skills WHERE name=%s", (key,))
+        changed = cur.rowcount == 1
+        conn.commit()
+        return changed
