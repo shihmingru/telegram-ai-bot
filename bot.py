@@ -19,7 +19,7 @@ from platform_tools import (
     cancel_action, execute_approved_action, execute_platform_tool,
     platform_tool_declarations, queue_action, is_allowed_telegram_user,
 )
-from agent_features import (add_memory, list_memories, forget_memory, memory_context, add_task, list_tasks, complete_task, add_reminder, due_reminders, skill_for)
+from agent_features import (add_memory, list_memories, forget_memory, memory_context, add_task, list_tasks, complete_task, add_reminder, due_reminders, mark_reminder_sent, fail_reminder, skill_for)
 from scheduled_tasks import add_schedule, list_schedules, cancel_schedule, set_schedule_paused, edit_schedule
 from agent_runtime import AgentBudget, compact_tool_result, runtime_guidance
 from agent_skills import list_skills, get_skill, propose_skill, list_pending_skills, decide_skill
@@ -1277,8 +1277,12 @@ def process_message(update_data):
             return
         if chat.get("type") == "private":
             try:
-                for reminder_chat, reminder_message, reminder_id in due_reminders(DATABASE_URL):
-                    send_telegram_message(reminder_chat, "Reminder: " + reminder_message)
+                for reminder_chat, reminder_message, reminder_id, attempts in due_reminders(DATABASE_URL):
+                    try:
+                        send_telegram_message(reminder_chat, "Reminder: " + reminder_message)
+                        mark_reminder_sent(DATABASE_URL, reminder_id)
+                    except Exception as delivery_error:
+                        fail_reminder(DATABASE_URL, reminder_id, type(delivery_error).__name__)
             except Exception as reminder_error:
                 print("REMINDER CHECK ERROR:", repr(reminder_error), flush=True)
 
