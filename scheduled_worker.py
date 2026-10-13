@@ -99,7 +99,7 @@ def main():
         cur.execute("""
             SELECT id, user_id, chat_id, request, frequency, local_time, timezone
             FROM agent_schedules
-            WHERE enabled=TRUE AND next_run <= NOW()
+            WHERE enabled=TRUE AND paused=FALSE AND next_run <= NOW()
             ORDER BY next_run
             LIMIT 20
             FOR UPDATE SKIP LOCKED
