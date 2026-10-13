@@ -1305,7 +1305,7 @@ def process_message(update_data):
 
         command = text.strip().split()
         personal_commands = {"/remember", "/memories", "/forget", "/task", "/tasks", "/done", "/remind", "/schedule", "/schedules", "/unschedule", "/pause-schedule", "/resume-schedule", "/edit-schedule", "/skills", "/skill", "/skill-create", "/skill-update", "/skill-pending", "/skill-approve", "/skill-reject", "/skill-delete"}
-        skill_commands = {"/skills", "/skill", "/skill-create", "/skill-update", "/skill-pending", "/skill-approve", "/skill-reject"}
+        skill_commands = {"/skills", "/skill", "/skill-create", "/skill-update", "/skill-pending", "/skill-approve", "/skill-reject", "/skill-delete"}
         if command and command[0].split("@")[0] in personal_commands and chat.get("type") != "private":
             send_telegram_message(chat_id, "For privacy, use personal memory, task, and reminder commands in a private chat with the bot.")
             return
