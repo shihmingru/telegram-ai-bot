@@ -21,6 +21,7 @@ from platform_tools import (
 from agent_features import (add_memory, list_memories, forget_memory, memory_context, add_task, list_tasks, complete_task, add_reminder, due_reminders, skill_for)
 from scheduled_tasks import add_schedule, list_schedules, cancel_schedule
 from agent_runtime import AgentBudget, compact_tool_result, runtime_guidance
+from agent_skills import list_skills, get_skill, propose_skill, list_pending_skills, decide_skill
 from safe_web import safe_get
 from reverse_image_fallback import (
     is_reverse_image_search_request,
@@ -761,11 +762,50 @@ def build_agent_tools(user_id=None):
     ]
     if is_platform_user(user_id):
         toolset.append(types.Tool(function_declarations=platform_tool_declarations(types)))
+        toolset.append(types.Tool(function_declarations=[
+            types.FunctionDeclaration(
+                name="skills_list",
+                description="List the user's built-in and custom reusable skills.",
+                parameters={"type": "OBJECT", "properties": {}},
+            ),
+            types.FunctionDeclaration(
+                name="skill_view",
+                description="Read a skill's full instructions before applying it.",
+                parameters={"type": "OBJECT", "properties": {
+                    "name": {"type": "STRING", "description": "Skill name"}
+                }, "required": ["name"]},
+            ),
+            types.FunctionDeclaration(
+                name="skill_propose",
+                description="Propose a new or updated reusable skill. This only stages a proposal; never claim it is active until the user approves it.",
+                parameters={"type": "OBJECT", "properties": {
+                    "action": {"type": "STRING", "enum": ["create", "update"]},
+                    "name": {"type": "STRING"},
+                    "instructions": {"type": "STRING"}
+                }, "required": ["action", "name", "instructions"]},
+            ),
+        ]))
     return toolset
 
 
 def execute_agent_tool(name, args, user_id=None):
-    """Execute web tools or an authorized platform tool."""
+    """Execute web, skill-library, or an authorized platform tool."""
+    if name in {"skills_list", "skill_view", "skill_propose"}:
+        if not is_platform_user(user_id):
+            return {"error": "Skill-management tools are available only to the configured owner."}
+        try:
+            if name == "skills_list":
+                return {"skills": list_skills(DATABASE_URL)}
+            if name == "skill_view":
+                skill = get_skill(DATABASE_URL, str(args.get("name", "")))
+                return skill or {"error": "No skill found with that name."}
+            ident = propose_skill(
+                DATABASE_URL, user_id, str(args.get("action", "")),
+                str(args.get("name", "")), str(args.get("instructions", "")),
+            )
+            return {"proposal_id": ident, "status": "pending_approval", "instruction": "The skill is not active until the owner approves it with /skill-approve ID."}
+        except Exception as error:
+            return {"error": str(error)}
     platform_names = {
         "github_search_repositories", "github_get_file", "github_create_issue",
         "render_list_services", "render_list_deploys", "render_trigger_deploy",
@@ -1153,7 +1193,7 @@ def process_message(update_data):
         print("Received message. Text present:", bool(text), "media parts:", len(media_parts), flush=True)
 
         command = text.strip().split()
-        personal_commands = {"/remember", "/memories", "/forget", "/task", "/tasks", "/done", "/remind", "/schedule", "/schedules", "/unschedule"}
+        personal_commands = {"/remember", "/memories", "/forget", "/task", "/tasks", "/done", "/remind", "/schedule", "/schedules", "/unschedule", "/skills", "/skill", "/skill-create", "/skill-update", "/skill-pending", "/skill-approve", "/skill-reject"}
         if command and command[0].split("@")[0] in personal_commands and chat.get("type") != "private":
             send_telegram_message(chat_id, "For privacy, use personal memory, task, and reminder commands in a private chat with the bot.")
             return
@@ -1164,6 +1204,50 @@ def process_message(update_data):
             except Exception as reminder_error:
                 print("REMINDER CHECK ERROR:", repr(reminder_error), flush=True)
 
+        if command and command[0].split("@")[0] == "/skills":
+            try:
+                rows = list_skills(DATABASE_URL)
+                send_telegram_message(chat_id, "Reusable skills:\\n" + "\\n".join("- " + row["name"] + " (" + row["source"] + ")" for row in rows))
+            except Exception:
+                send_telegram_message(chat_id, "I could not list skills right now.")
+            return
+        if command and command[0].split("@")[0] == "/skill":
+            name = text.partition(" ")[2].strip()
+            if not name:
+                send_telegram_message(chat_id, "Use /skill NAME to read a skill. Create or update one with /skill-create NAME | instructions or /skill-update NAME | instructions. Review with /skill-pending, then /skill-approve ID or /skill-reject ID.")
+            else:
+                try:
+                    skill = get_skill(DATABASE_URL, name)
+                    send_telegram_message(chat_id, (skill["name"] + "\\n\\n" + skill["instructions"]) if skill else "No skill found with that name.")
+                except Exception:
+                    send_telegram_message(chat_id, "I could not read that skill right now.")
+            return
+        if command and command[0].split("@")[0] in {"/skill-create", "/skill-update"}:
+            action = "create" if command[0].split("@")[0] == "/skill-create" else "update"
+            payload = text.partition(" ")[2]
+            name, sep, instructions = payload.partition("|")
+            if not sep:
+                send_telegram_message(chat_id, "Use /" + command[0].split("@")[0][1:] + " NAME | detailed instructions")
+            else:
+                try:
+                    ident = propose_skill(DATABASE_URL, user_id, action, name.strip(), instructions.strip())
+                    send_telegram_message(chat_id, "Skill proposal #" + str(ident) + " is pending. It is not active until approved with /skill-approve " + str(ident) + ".")
+                except Exception as error:
+                    send_telegram_message(chat_id, "I could not stage that skill: " + str(error))
+            return
+        if command and command[0].split("@")[0] == "/skill-pending":
+            try:
+                rows = list_pending_skills(DATABASE_URL, user_id)
+                listing = "\\n".join("#%s %s %s (%s)" % (ident, action, name, created.strftime("%Y-%m-%d")) for ident, action, name, created in rows)
+                send_telegram_message(chat_id, "Pending skill proposals:\\n" + listing if rows else "No pending skill proposals.")
+            except Exception:
+                send_telegram_message(chat_id, "I could not list pending proposals.")
+            return
+        if command and command[0].split("@")[0] in {"/skill-approve", "/skill-reject"}:
+            approve = command[0].split("@")[0] == "/skill-approve"
+            changed = len(command) == 2 and command[1].isdigit() and decide_skill(DATABASE_URL, user_id, int(command[1]), approve)
+            send_telegram_message(chat_id, ("Skill proposal approved and activated." if approve else "Skill proposal rejected.") if changed else "No pending skill proposal with that ID belongs to you.")
+            return
         if command and command[0].split("@")[0] == "/remember":
             try:
                 ident = add_memory(DATABASE_URL, user_id, text.partition(" ")[2].strip())
@@ -1350,7 +1434,15 @@ def process_message(update_data):
             prompt += "\n\n" + saved_context
         selected_skill = skill_for(text)
         if selected_skill:
-            prompt += "\n\nCoaching skill guidance:\n" + selected_skill
+            prompt += "\\n\\nCoaching skill guidance:\\n" + selected_skill
+        try:
+            for item in list_skills(DATABASE_URL):
+                if item["source"] == "custom" and item["name"] in (text or "").lower():
+                    custom = get_skill(DATABASE_URL, item["name"])
+                    if custom:
+                        prompt += "\\n\\nCustom skill guidance (" + custom["name"] + "):\\n" + custom["instructions"]
+        except Exception:
+            pass
         if media_notes:
             prompt += "\nAttachment notes:\n" + "\n".join(media_notes)
 
