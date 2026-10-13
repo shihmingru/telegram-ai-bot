@@ -14,7 +14,7 @@ This repository is a Telegram-first personal agent, not a full Hermes Agent clon
 | Recurring jobs | Partial | Daily/weekly recurring jobs with pause/resume/edit/cancel and a GitHub Actions worker exist. The worker is opt-in and requires configured repository secrets; end-to-end delivery still needs live verification. |
 | Multimodal input | Partial | Image/audio/video/PDF and supported documents are forwarded when accepted by the configured model; not all formats are guaranteed. |
 | Built-in coaching skills | Present | French, vegetarian cooking, drawing, Buddhist studies, and 鈴鼓. |
-| Persistent custom skills | Added in this branch | Owner-only; changes are staged and require explicit approval. |
+| Persistent custom skills | Added in this branch | Owner-only; create/update changes are staged and require explicit approval; custom skills can be explicitly deleted. |
 | GitHub / Render / Todoist / Calendar | Partial | Existing owner-gated tools; credentials and service APIs determine availability. Mutations use approval queue. |
 | Bounded runtime policy | Added in this branch | Tool-call limits, bounded tool output, reduced sensitive argument/error logging, and zero-cost instructions. |
 
