@@ -9,6 +9,7 @@ import psycopg
 
 _FILENAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._ -]{0,99}$")
 MAX_FILE_CHARS = 50_000
+MAX_FILES_PER_USER = 100
 
 
 def validate_filename(filename: str) -> str:
@@ -77,6 +78,10 @@ def save_file(db: str, user_id: str, filename: str, content: str, overwrite: boo
         exists = cur.fetchone() is not None
         if exists and not overwrite:
             return {"saved": False, "reason": "exists", "filename": name, "instruction": "Read the existing file first; set overwrite=true only when the user asks to replace it."}
+        if not exists:
+            cur.execute("SELECT COUNT(*) FROM agent_workspace_files WHERE user_id=%s", (str(user_id),))
+            if cur.fetchone()[0] >= MAX_FILES_PER_USER:
+                return {"saved": False, "reason": "file_limit", "instruction": f"Your workspace is limited to {MAX_FILES_PER_USER} text files."}
         cur.execute(
             """INSERT INTO agent_workspace_files(user_id,filename,content)
                VALUES (%s,%s,%s)
