@@ -643,8 +643,10 @@ def send_telegram_message(chat_id, text):
         if not payload.get("ok"):
             raise RuntimeError(payload)
         print("Telegram response sent successfully.", flush=True)
+        return True
     except Exception as error:
-        print("TELEGRAM SEND ERROR:", repr(error), flush=True)
+        print("TELEGRAM SEND ERROR:", type(error).__name__, flush=True)
+        return False
 
 
 def configure_webhook():
@@ -1279,8 +1281,11 @@ def process_message(update_data):
             try:
                 for reminder_chat, reminder_message, reminder_id, attempts in due_reminders(DATABASE_URL):
                     try:
-                        send_telegram_message(reminder_chat, "Reminder: " + reminder_message)
-                        mark_reminder_sent(DATABASE_URL, reminder_id)
+                        delivered = send_telegram_message(reminder_chat, "Reminder: " + reminder_message)
+                        if delivered:
+                            mark_reminder_sent(DATABASE_URL, reminder_id)
+                        else:
+                            fail_reminder(DATABASE_URL, reminder_id, "Telegram send failed")
                     except Exception as delivery_error:
                         fail_reminder(DATABASE_URL, reminder_id, type(delivery_error).__name__)
             except Exception as reminder_error:
