@@ -5,6 +5,7 @@ This module deliberately adds no paid services or runtime dependencies.
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -67,6 +68,40 @@ def compact_tool_result(result: Any, max_chars: int = DEFAULT_MAX_TOOL_RESULT_CH
         "instruction": "Tool output was truncated to stay within the free runtime budget. Request a narrower result if more detail is needed.",
     }
 
+
+
+def run_parallel_analysis(tasks: list[str], worker, max_workers: int = 3, max_chars: int = 2500) -> dict:
+    """Run a small set of independent, read-only analysis subtasks concurrently.
+
+    The caller supplies the model worker. Tasks and outputs are bounded to keep
+    the work predictable on free model quotas. This is delegated analysis, not
+    an isolated autonomous agent or a security boundary.
+    """
+    if not isinstance(tasks, list):
+        return {"error": "tasks must be a list"}
+    cleaned = list(dict.fromkeys(" ".join(str(task).split())[:500] for task in tasks if str(task).strip()))
+    if not 2 <= len(cleaned) <= 3:
+        return {"error": "Provide two or three distinct analysis subtasks."}
+    workers = max(1, min(int(max_workers), 3, len(cleaned)))
+    results = []
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        pending = {pool.submit(worker, task): task for task in cleaned}
+        for future in as_completed(pending):
+            task = pending[future]
+            try:
+                answer = str(future.result() or "").strip()
+                results.append({"task": task, "result": answer[:max_chars]})
+            except Exception as error:
+                results.append({"task": task, "error": type(error).__name__})
+    results.sort(key=lambda item: cleaned.index(item["task"]))
+    return {
+        "mode": "bounded_parallel_analysis",
+        "isolated_agent": False,
+        "tasks_completed": sum("result" in item for item in results),
+        "tasks_requested": len(cleaned),
+        "results": results,
+        "note": "Uses the same configured model and its existing quota; no paid fallback or isolated execution environment is provided.",
+    }
 
 def list_skill_names() -> list[str]:
     """Return the skill names configured in the existing coaching library."""
