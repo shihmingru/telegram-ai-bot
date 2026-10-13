@@ -184,7 +184,11 @@ def main():
             except Exception as db_error:
                 print(f"Task {ident} retry state could not be saved ({type(db_error).__name__}).", flush=True)
             try:
-                send(chat_id, f"Scheduled task #{ident} failed this run. It will retry up to three times when possible; no paid fallback was attempted.")
+                if failure_count < 2:
+                    notice = f"Scheduled task #{ident} failed this run. It will retry after a delay when the worker runs again (three attempts total). No paid fallback was attempted."
+                else:
+                    notice = f"Scheduled task #{ident} failed after three attempts. Automatic retries for this occurrence have stopped; it remains scheduled for its next regular run. No paid fallback was attempted."
+                send(chat_id, notice)
             except Exception as send_exc:
                 print(f"Task {ident} failure notice could not be delivered ({type(send_exc).__name__}).", flush=True)
 
