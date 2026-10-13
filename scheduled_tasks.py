@@ -142,3 +142,20 @@ def set_schedule_paused(db, user_id, ident, paused):
         changed = cur.rowcount == 1
         conn.commit()
         return changed
+
+
+def edit_schedule(db, user_id, ident, text):
+    """Replace the request and timing of an active recurring task owned by user_id."""
+    frequency, clock, timezone, request, due = parse_schedule_text(text)
+    ensure_schedule_table(db)
+    with psycopg.connect(db) as conn, conn.cursor() as cur:
+        cur.execute(
+            """UPDATE agent_schedules
+               SET request=%s, frequency=%s, local_time=%s, timezone=%s,
+                   next_run=%s, paused=FALSE
+               WHERE id=%s AND user_id=%s AND enabled=TRUE""",
+            (request, frequency, clock, timezone, due, int(ident), str(user_id)),
+        )
+        changed = cur.rowcount == 1
+        conn.commit()
+        return changed
