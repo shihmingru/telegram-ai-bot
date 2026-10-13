@@ -1285,20 +1285,20 @@ def process_message(update_data):
         if command and command[0].split("@")[0] in {"/help", "/capabilities"}:
             send_telegram_message(
                 chat_id,
-                "Current capabilities:\\n"
-                "- Web search, opening pages, same-site crawling, multi-angle parallel research, and private conversation-history search.\\n"
-                "- Image, audio, video, PDF, and supported document input when the configured Gemini model accepts the format.\\n"
-                "- Conversation history search, saved memories, tasks, reminders, and daily/weekly recurring schedules with pause/resume/edit/cancel.\\n"
-                "- Built-in coaching skills plus owner-managed reusable skills with approval before activation.\\n"
-                "- Owner-gated GitHub, Render, Todoist, and Google Calendar tools when credentials are configured.\\n"
-                "- Explicit approval for supported external changes.\\n\\n"
+                "Current capabilities:\n"
+                "- Web search, opening pages, same-site crawling, multi-angle parallel research, and private conversation-history search.\n"
+                "- Image, audio, video, PDF, and supported document input when the configured Gemini model accepts the format.\n"
+                "- Conversation history search, saved memories, tasks, reminders, and daily/weekly recurring schedules with pause/resume/edit/cancel.\n"
+                "- Built-in coaching skills plus owner-managed reusable skills with approval before activation.\n"
+                "- Owner-gated GitHub, Render, Todoist, and Google Calendar tools when credentials are configured.\n"
+                "- Explicit approval for supported external changes.\n\n"
                 "Current limitations: no guaranteed Hermes feature parity; no unrestricted terminal or file-system execution, general browser interaction, true isolated subagents, MCP/plugin registry, or full multi-platform gateway. Free AI and hosting quotas can limit availability. Use /skills and /schedules for details."
             )
             return
         if command and command[0].split("@")[0] == "/skills":
             try:
                 rows = list_skills(DATABASE_URL)
-                send_telegram_message(chat_id, "Reusable skills:\\n" + "\\n".join("- " + row["name"] + " (" + row["source"] + ")" for row in rows))
+                send_telegram_message(chat_id, "Reusable skills:\n" + "\n".join("- " + row["name"] + " (" + row["source"] + ")" for row in rows))
             except Exception:
                 send_telegram_message(chat_id, "I could not list skills right now.")
             return
@@ -1309,7 +1309,7 @@ def process_message(update_data):
             else:
                 try:
                     skill = get_skill(DATABASE_URL, name)
-                    send_telegram_message(chat_id, (skill["name"] + "\\n\\n" + skill["instructions"]) if skill else "No skill found with that name.")
+                    send_telegram_message(chat_id, (skill["name"] + "\n\n" + skill["instructions"]) if skill else "No skill found with that name.")
                 except Exception:
                     send_telegram_message(chat_id, "I could not read that skill right now.")
             return
@@ -1329,8 +1329,8 @@ def process_message(update_data):
         if command and command[0].split("@")[0] == "/skill-pending":
             try:
                 rows = list_pending_skills(DATABASE_URL, user_id)
-                listing = "\\n".join("#%s %s %s (%s)" % (ident, action, name, created.strftime("%Y-%m-%d")) for ident, action, name, created in rows)
-                send_telegram_message(chat_id, "Pending skill proposals:\\n" + listing if rows else "No pending skill proposals.")
+                listing = "\n".join("#%s %s %s (%s)" % (ident, action, name, created.strftime("%Y-%m-%d")) for ident, action, name, created in rows)
+                send_telegram_message(chat_id, "Pending skill proposals:\n" + listing if rows else "No pending skill proposals.")
             except Exception:
                 send_telegram_message(chat_id, "I could not list pending proposals.")
             return
@@ -1419,12 +1419,12 @@ def process_message(update_data):
                 else:
                     lines = [
                         "#" + str(ident) + " [" + frequency + "] " + local_time + " " + timezone
-                        + "\\nNext run: " + next_run.strftime("%Y-%m-%d %H:%M %Z")
-                        + ("\\nStatus: paused" if paused else "")
-                        + "\\n" + request_text
+                        + "\nNext run: " + next_run.strftime("%Y-%m-%d %H:%M %Z")
+                        + ("\nStatus: paused" if paused else "")
+                        + "\n" + request_text
                         for ident, request_text, frequency, local_time, timezone, next_run, paused in rows
                     ]
-                    send_telegram_message(chat_id, "Your recurring tasks:\\n\\n" + "\\n\\n".join(lines) + "\\n\\nUse /pause-schedule ID, /resume-schedule ID, or /unschedule ID.")
+                    send_telegram_message(chat_id, "Your recurring tasks:\n\n" + "\n\n".join(lines) + "\n\nUse /pause-schedule ID, /resume-schedule ID, or /unschedule ID.")
             except Exception as error:
                 send_telegram_message(chat_id, "I could not list your schedules: " + str(error))
             return
@@ -1539,9 +1539,9 @@ def process_message(update_data):
         conversation_text = ""
         for role, content in recent_messages:
             if role == "user":
-                conversation_text += f"User: {content}\\n"
+                conversation_text += f"User: {content}\n"
             elif role == "assistant":
-                conversation_text += f"Assistant: {content}\\n"
+                conversation_text += f"Assistant: {content}\n"
 
         prompt = (
             "Recent conversation:\n"
@@ -1554,13 +1554,13 @@ def process_message(update_data):
             prompt += "\n\n" + saved_context
         selected_skill = skill_for(text)
         if selected_skill:
-            prompt += "\\n\\nCoaching skill guidance:\\n" + selected_skill
+            prompt += "\n\nCoaching skill guidance:\n" + selected_skill
         try:
             for item in list_skills(DATABASE_URL):
                 if item["source"] == "custom" and item["name"] in (text or "").lower():
                     custom = get_skill(DATABASE_URL, item["name"])
                     if custom:
-                        prompt += "\\n\\nCustom skill guidance (" + custom["name"] + "):\\n" + custom["instructions"]
+                        prompt += "\n\nCustom skill guidance (" + custom["name"] + "):\n" + custom["instructions"]
         except Exception:
             pass
         if media_notes:
