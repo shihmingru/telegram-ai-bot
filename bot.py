@@ -20,7 +20,7 @@ from platform_tools import (
     platform_tool_declarations, queue_action, is_allowed_telegram_user,
 )
 from agent_features import (add_memory, list_memories, forget_memory, memory_context, add_task, list_tasks, complete_task, add_reminder, due_reminders, skill_for)
-from scheduled_tasks import add_schedule, list_schedules, cancel_schedule, set_schedule_paused
+from scheduled_tasks import add_schedule, list_schedules, cancel_schedule, set_schedule_paused, edit_schedule
 from agent_runtime import AgentBudget, compact_tool_result, runtime_guidance
 from agent_skills import list_skills, get_skill, propose_skill, list_pending_skills, decide_skill
 from safe_web import safe_get
@@ -1267,7 +1267,7 @@ def process_message(update_data):
         print("Received message. Text present:", bool(text), "media parts:", len(media_parts), flush=True)
 
         command = text.strip().split()
-        personal_commands = {"/remember", "/memories", "/forget", "/task", "/tasks", "/done", "/remind", "/schedule", "/schedules", "/unschedule", "/pause-schedule", "/resume-schedule", "/skills", "/skill", "/skill-create", "/skill-update", "/skill-pending", "/skill-approve", "/skill-reject"}
+        personal_commands = {"/remember", "/memories", "/forget", "/task", "/tasks", "/done", "/remind", "/schedule", "/schedules", "/unschedule", "/pause-schedule", "/resume-schedule", "/edit-schedule", "/skills", "/skill", "/skill-create", "/skill-update", "/skill-pending", "/skill-approve", "/skill-reject"}
         skill_commands = {"/skills", "/skill", "/skill-create", "/skill-update", "/skill-pending", "/skill-approve", "/skill-reject"}
         if command and command[0].split("@")[0] in personal_commands and chat.get("type") != "private":
             send_telegram_message(chat_id, "For privacy, use personal memory, task, and reminder commands in a private chat with the bot.")
@@ -1427,6 +1427,23 @@ def process_message(update_data):
                     send_telegram_message(chat_id, "Your recurring tasks:\\n\\n" + "\\n\\n".join(lines) + "\\n\\nUse /pause-schedule ID, /resume-schedule ID, or /unschedule ID.")
             except Exception as error:
                 send_telegram_message(chat_id, "I could not list your schedules: " + str(error))
+            return
+        if command and command[0].split("@")[0] == "/edit-schedule":
+            if chat.get("type") != "private":
+                send_telegram_message(chat_id, "For privacy, manage recurring tasks in a private chat with the bot.")
+                return
+            payload = text.partition(" ")[2].strip()
+            ident_text, sep, schedule_text = payload.partition("|")
+            if not sep or not ident_text.strip().isdigit():
+                send_telegram_message(chat_id, "Use /edit-schedule ID | Every day at 8am, send me the latest AI headlines")
+                return
+            try:
+                changed = edit_schedule(DATABASE_URL, user_id, int(ident_text.strip()), schedule_text.strip())
+                send_telegram_message(chat_id, "Recurring task updated and resumed." if changed else "No active recurring task with that ID belongs to you.")
+            except ValueError as error:
+                send_telegram_message(chat_id, str(error))
+            except Exception:
+                send_telegram_message(chat_id, "I could not update that recurring task right now.")
             return
         if command and command[0].split("@")[0] in {"/pause-schedule", "/resume-schedule"}:
             if chat.get("type") != "private":
