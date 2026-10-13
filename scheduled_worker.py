@@ -168,7 +168,7 @@ def main():
                 conn.commit()
             print(f"Task {ident} delivered.", flush=True)
         except Exception as exc:
-            safe_error = type(exc).__name__ + ": " + str(exc)[:350]
+            safe_error = type(exc).__name__
             print(f"Task {ident} failed ({type(exc).__name__}).", flush=True)
             # Three total attempts per scheduled occurrence; retry after 15 minutes.
             try:
