@@ -1288,7 +1288,7 @@ def process_message(update_data):
                 "Current capabilities:\\n"
                 "- Web search, opening pages, same-site crawling, multi-angle parallel research, and private conversation-history search.\\n"
                 "- Image, audio, video, PDF, and supported document input when the configured Gemini model accepts the format.\\n"
-                "- Conversation history search, saved memories, tasks, reminders, and daily/weekly recurring schedules with pause/resume/cancel.\\n"
+                "- Conversation history search, saved memories, tasks, reminders, and daily/weekly recurring schedules with pause/resume/edit/cancel.\\n"
                 "- Built-in coaching skills plus owner-managed reusable skills with approval before activation.\\n"
                 "- Owner-gated GitHub, Render, Todoist, and Google Calendar tools when credentials are configured.\\n"
                 "- Explicit approval for supported external changes.\\n\\n"
