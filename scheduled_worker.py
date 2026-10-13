@@ -96,6 +96,7 @@ def execute(request):
 def main():
     # Claim due rows and advance their next-run timestamps in a transaction to avoid duplicates.
     with psycopg.connect(DB) as conn, conn.cursor() as cur:
+        cur.execute("ALTER TABLE agent_schedules ADD COLUMN IF NOT EXISTS paused BOOLEAN NOT NULL DEFAULT FALSE")
         cur.execute("""
             SELECT id, user_id, chat_id, request, frequency, local_time, timezone
             FROM agent_schedules
