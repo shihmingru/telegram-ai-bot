@@ -25,6 +25,9 @@ def ensure_schedule_table(db):
             )
         """)
         cur.execute("ALTER TABLE agent_schedules ADD COLUMN IF NOT EXISTS paused BOOLEAN NOT NULL DEFAULT FALSE")
+        cur.execute("ALTER TABLE agent_schedules ADD COLUMN IF NOT EXISTS retry_at TIMESTAMPTZ")
+        cur.execute("ALTER TABLE agent_schedules ADD COLUMN IF NOT EXISTS failure_count INTEGER NOT NULL DEFAULT 0")
+        cur.execute("ALTER TABLE agent_schedules ADD COLUMN IF NOT EXISTS last_error TEXT")
         cur.execute("CREATE INDEX IF NOT EXISTS agent_schedules_due_idx ON agent_schedules(next_run) WHERE enabled = TRUE AND paused = FALSE")
         conn.commit()
 
