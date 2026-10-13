@@ -30,11 +30,11 @@ The Telegram bot supports these commands in a private chat:
 - `/schedules` lists active schedules.
 - `/unschedule ID` cancels a schedule.
 
-Requests are stored in the existing PostgreSQL database. The `.github/workflows/scheduled-tasks.yml` GitHub Actions workflow checks for due tasks every 15 minutes and can also be run manually from the Actions tab. Scheduled starts can be delayed by GitHub; this is not an exact-time guarantee.
+Requests are stored in the existing PostgreSQL database. The `.github/workflows/scheduled-tasks.yml` GitHub Actions workflow checks for due tasks every 15 minutes and can also be run manually from the Actions tab. A task is executed on the first successful poll after its due time, so delivery is typically up to 15 minutes late plus any GitHub queue delay. GitHub scheduled starts can be delayed; this is not an exact-time guarantee.
 
 ### One-time GitHub Actions setup required
 
-In the repository's Settings → Secrets and variables → Actions, add these repository secrets using the same existing credentials used by the bot:
+In the repository's Settings → Secrets and variables → Actions, add a repository variable named `ENABLE_RECURRING_TASKS` with the exact value `true` only when you are ready to enable scheduled delivery. The workflow is deliberately disabled unless this opt-in is present. Then add these repository secrets using the same existing credentials used by the bot:
 
 - `DATABASE_URL`: the existing PostgreSQL connection string.
 - `TELEGRAM_TOKEN`: the existing Telegram bot token.
@@ -42,7 +42,7 @@ In the repository's Settings → Secrets and variables → Actions, add these re
 
 Optionally add a repository variable named `GEMINI_MODEL` with the same model configured for the live bot. If omitted, the worker uses `gemini-2.5-flash-lite`. Confirm this model is eligible for the user's current free quota before relying on it.
 
-Do not paste secrets into chat, source files, workflow YAML, or logs. The bot can save schedules before Actions is configured, but they will not execute automatically until the workflow is enabled and all three secrets are set. After setup, use Actions → Recurring Telegram tasks → Run workflow to test it. The workflow does not create Render services or databases and does not add paid providers.
+Do not paste secrets into chat, source files, workflow YAML, or logs. The bot can save schedules before Actions is configured, but they will not execute automatically until the workflow is enabled and all three secrets are set. After setup, use Actions → Recurring Telegram tasks → Run workflow to test it. Do not use a real due task for a test unless you want it to send a Telegram message and consume Gemini free-tier quota. The workflow does not create Render services or databases and does not add paid providers.
 
 The worker supports general user-authored recurring prompts, so the topic does not need to be hard-coded in the source. It is designed for tasks that can return a text result to Telegram, such as summaries, research briefs, study prompts, and reminders. It does not yet perform arbitrary external actions such as booking, purchasing, or changing calendar entries. For requests that appear to need current information, it attempts free Google News RSS retrieval and then Wikipedia search. These sources are best-effort and are not a universal web search engine; the worker must disclose missing live results. Gemini execution still depends on the existing API key's available quota. No paid fallback is attempted.
 
@@ -53,4 +53,4 @@ The worker supports general user-authored recurring prompts, so the topic does n
 - `safe_web.py` rejects private/reserved destinations and revalidates redirects. Application-level DNS validation cannot completely eliminate DNS-rebinding risk without network-level egress controls.
 - Gemini availability and free quotas are account-specific and may change. If the configured model is unavailable, the bot intentionally fails rather than attempting a possibly billable model.
 - Existing Render free-service sleep/usage rules and the external database provider's plan remain outside this repository's control. Review their dashboards and billing settings regularly.
-- This branch has not been deployed to Render. Verify the test workflow and explicitly confirm the chosen Gemini model's free eligibility before merging to `main`.
+- Changes to this workflow affect GitHub Actions, not the Render web-service deployment. Before enabling it, confirm the selected Gemini model is free-tier eligible for the same API key and region; no billing account should be linked.
