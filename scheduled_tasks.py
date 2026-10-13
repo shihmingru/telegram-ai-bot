@@ -42,10 +42,6 @@ def parse_schedule_text(text):
             raise ValueError("Use a valid 24-hour time, such as 08:00 or 19:30.")
         timezone = timezone or DEFAULT_TZ
     else:
-        # Examples accepted:
-        # "Every day at 8am, send me the latest AI headlines"
-        # "Send me a daily summary at 08:30"
-        # "Every week at 09:00 [Europe/Paris], review my study plan"
         frequency_match = re.search(
             r"\b(every\s+day|each\s+day|daily|every\s+morning|every\s+evening|every\s+week|weekly)\b",
             source, re.IGNORECASE
@@ -73,7 +69,6 @@ def parse_schedule_text(text):
         clock = f"{hour:02d}:{minute:02d}"
         tz_match = re.search(r"\[([A-Za-z_/-]+)\]", source)
         timezone = tz_match.group(1) if tz_match else DEFAULT_TZ
-        # Remove scheduling metadata, retaining the actual task request.
         request = source
         for match in sorted([frequency_match, time_match] + ([tz_match] if tz_match else []),
                             key=lambda m: m.start(), reverse=True):
@@ -83,6 +78,7 @@ def parse_schedule_text(text):
         request = re.sub(r"(?i)^(?:and\s+)?(?:then\s+)?", "", request).strip()
         if not request:
             raise ValueError("Please include what you want the bot to do in each run.")
+    request = re.sub(r"\s+", " ", request).strip()
     try:
         zone = ZoneInfo(timezone)
     except Exception as exc:
@@ -94,6 +90,7 @@ def parse_schedule_text(text):
     if due <= now:
         due += timedelta(days=1 if frequency == "daily" else 7)
     return frequency, f"{hour:02d}:{minute:02d}", timezone, request, due
+
 
 def add_schedule(db, user_id, chat_id, text):
     frequency, clock, timezone, request, due = parse_schedule_text(text)
