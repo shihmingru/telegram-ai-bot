@@ -732,6 +732,8 @@ def build_agent_tools(user_id=None):
                     description="Read one text file from the current Telegram user's private workspace by exact filename.",
                     parameters={"type": "OBJECT", "properties": {
                         "filename": {"type": "STRING"},
+                        "start": {"type": "INTEGER", "description": "Character offset, default 0"},
+                        "length": {"type": "INTEGER", "description": "Characters to read, capped at 9000"},
                     }, "required": ["filename"]},
                 ),
                 types.FunctionDeclaration(
@@ -883,7 +885,7 @@ def execute_agent_tool(name, args, user_id=None):
             if name == "workspace_list":
                 return {"files": list_files(DATABASE_URL, user_id)}
             if name == "workspace_read":
-                result = read_file(DATABASE_URL, user_id, str(args.get("filename", "")))
+                result = read_file(DATABASE_URL, user_id, str(args.get("filename", "")), int(args.get("start", 0)), int(args.get("length", 9000)))
                 return result or {"error": "No file with that name exists in your private workspace."}
             return save_file(
                 DATABASE_URL, user_id, str(args.get("filename", "")),
