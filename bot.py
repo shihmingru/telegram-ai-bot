@@ -21,7 +21,7 @@ from platform_tools import (
 )
 from agent_features import (add_memory, list_memories, forget_memory, memory_context, add_task, list_tasks, complete_task, add_reminder, due_reminders, mark_reminder_sent, fail_reminder, skill_for)
 from scheduled_tasks import add_schedule, list_schedules, cancel_schedule, set_schedule_paused, edit_schedule
-from agent_runtime import AgentBudget, compact_tool_result, runtime_guidance
+from agent_runtime import AgentBudget, compact_tool_result, runtime_guidance, run_parallel_analysis
 from agent_skills import list_skills, get_skill, propose_skill, list_pending_skills, decide_skill
 from safe_web import safe_get
 from reverse_image_fallback import (
@@ -734,6 +734,21 @@ def build_agent_tools(user_id=None):
                     },
                 ),
                 types.FunctionDeclaration(
+                    name="parallel_analysis",
+                    description=(
+                        "Split a complex read-only question into two or three independent analysis tasks and run them concurrently. "
+                        "Each task uses the same configured Gemini model without tools, has bounded output, and consumes the same free model quota. "
+                        "This is parallel analysis, not an isolated subagent or sandbox. Use at most once per user request."
+                    ),
+                    parameters={
+                        "type": "OBJECT",
+                        "properties": {
+                            "tasks": {"type": "ARRAY", "items": {"type": "STRING"}, "minItems": 2, "maxItems": 3},
+                        },
+                        "required": ["tasks"],
+                    },
+                ),
+                types.FunctionDeclaration(
                     name="web_research",
                     description=(
                         "Research a question from several independent angles using the existing no-key public search. "
@@ -874,6 +889,20 @@ def execute_agent_tool(name, args, user_id=None):
             ], "count": len(rows)}
         except Exception as error:
             return {"error": "Conversation search unavailable: " + type(error).__name__}
+    if name == "parallel_analysis":
+        tasks = args.get("tasks")
+        def analyse(task):
+            response = gemini_client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=(
+                    "Perform only this bounded, read-only analysis subtask. "
+                    "Do not claim to use tools or access external information. "
+                    "Be concise and state uncertainty.\\n\\nTask: " + str(task)[:500]
+                ),
+                config=types.GenerateContentConfig(temperature=0.2),
+            )
+            return response.text or ""
+        return run_parallel_analysis(tasks, analyse, max_workers=3, max_chars=2200)
     if name == "web_research":
         queries = args.get("queries") or []
         if not isinstance(queries, list):
@@ -1046,6 +1075,7 @@ You can answer normally when web tools are unnecessary. You may use multiple too
     contents = [types.Content(role="user", parts=initial_parts)]
 
     budget = AgentBudget(max_steps=6, max_tool_calls=12)
+    parallel_analysis_used = False
     while budget.begin_step():
         print("Agent reasoning/tool step:", budget.steps_used, flush=True)
 
@@ -1080,11 +1110,16 @@ You can answer normally when web tools are unnecessary. You may use multiple too
                 print("Agent tool-call budget exhausted.", flush=True)
             else:
                 print("Agent selected tool:", name, flush=True)
-                try:
-                    result = execute_agent_tool(name, dict(args), user_id=user_id)
-                except Exception as error:
-                    result = {"error": "Tool execution failed: " + type(error).__name__}
-                    print("Agent tool execution failed:", type(error).__name__, flush=True)
+                if name == "parallel_analysis" and parallel_analysis_used:
+                    result = {"error": "Parallel analysis is limited to one call per request to protect the free model quota."}
+                else:
+                    if name == "parallel_analysis":
+                        parallel_analysis_used = True
+                    try:
+                        result = execute_agent_tool(name, dict(args), user_id=user_id)
+                    except Exception as error:
+                        result = {"error": "Tool execution failed: " + type(error).__name__}
+                        print("Agent tool execution failed:", type(error).__name__, flush=True)
 
             result = compact_tool_result(result)
 
