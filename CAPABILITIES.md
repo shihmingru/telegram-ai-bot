@@ -10,6 +10,7 @@ This repository is a Telegram-first personal agent, not a full Hermes Agent clon
 | Public web research | Present | Search, open, same-site crawl, bounded concurrent multi-query research, one bounded parallel-analysis call, and user-scoped conversation search; public search endpoints can fail or rate-limit. |
 | Conversation context | Present | Recent messages persisted in PostgreSQL. |
 | Explicit saved memory | Present | User-scoped memory commands and memory context. |
+| Private text workspace | Added in this branch | PostgreSQL-backed user-scoped text files, bounded to 100 files and 50,000 characters per file; no shell or code execution. |
 | Tasks and reminders | Present | PostgreSQL-backed; due one-shot reminders are processed by the scheduled worker (when opted in) and the webhook path, with a lease, delivery confirmation, and up to five attempts. Delivery is at-least-once, not exactly-once. |
 | Recurring jobs | Partial | Daily/weekly recurring jobs with pause/resume/edit/cancel and a GitHub Actions worker exist. The worker is opt-in and requires configured repository secrets; end-to-end delivery still needs live verification. |
 | Multimodal input | Partial | Image/audio/video/PDF and supported documents are forwarded when accepted by the configured model; not all formats are guaranteed. |
@@ -20,7 +21,7 @@ This repository is a Telegram-first personal agent, not a full Hermes Agent clon
 
 ## Not equivalent to Hermes yet
 
-- No unrestricted shell/terminal or persistent isolated execution sandbox.
+- No unrestricted shell/terminal or persistent isolated execution sandbox. The private text workspace stores text/code but never executes it.
 - No general interactive browser automation or desktop/computer control.
 - No true isolated child agents/subagent delegation. A bounded parallel read-only analysis helper exists, but it uses the same model quota and is not an isolated subagent.
 - No MCP server client or extensible third-party plugin catalog.
