@@ -720,6 +720,18 @@ def build_agent_tools(user_id=None):
                     },
                 ),
                 types.FunctionDeclaration(
+                    name="session_search",
+                    description="Search the current Telegram user's saved conversation history for earlier discussions. Return matching excerpts only from that user's own history.",
+                    parameters={
+                        "type": "OBJECT",
+                        "properties": {
+                            "query": {"type": "STRING", "description": "Short phrase or keywords to search for"},
+                            "limit": {"type": "INTEGER", "description": "Maximum results, from 1 to 10"}
+                        },
+                        "required": ["query"],
+                    },
+                ),
+                types.FunctionDeclaration(
                     name="web_research",
                     description=(
                         "Research a question from several independent angles using the existing no-key public search. "
@@ -840,6 +852,26 @@ def execute_agent_tool(name, args, user_id=None):
         return execute_platform_tool(name, args, allow_mutation=False)
 
     """Execute one agent-selected tool and return JSON-safe data."""
+    if name == "session_search":
+        query = " ".join(str(args.get("query", "")).split())[:200]
+        if not query:
+            return {"error": "A search phrase is required."}
+        limit = max(1, min(int(args.get("limit", 5)), 10))
+        try:
+            with psycopg.connect(DATABASE_URL) as conn, conn.cursor() as cur:
+                cur.execute(
+                    """SELECT role, content, created_at FROM conversations
+                       WHERE user_id=%s AND content ILIKE %s
+                       ORDER BY created_at DESC LIMIT %s""",
+                    (str(user_id), "%" + query + "%", limit),
+                )
+                rows = cur.fetchall()
+            return {"query": query, "matches": [
+                {"role": role, "excerpt": str(content)[:900], "created_at": created.isoformat()}
+                for role, content, created in rows
+            ], "count": len(rows)}
+        except Exception as error:
+            return {"error": "Conversation search unavailable: " + type(error).__name__}
     if name == "web_research":
         queries = args.get("queries") or []
         if not isinstance(queries, list):
