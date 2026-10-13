@@ -24,7 +24,8 @@ def ensure_schedule_table(db):
                 last_run TIMESTAMPTZ
             )
         """)
-        cur.execute("CREATE INDEX IF NOT EXISTS agent_schedules_due_idx ON agent_schedules(next_run) WHERE enabled = TRUE")
+        cur.execute("ALTER TABLE agent_schedules ADD COLUMN IF NOT EXISTS paused BOOLEAN NOT NULL DEFAULT FALSE")
+        cur.execute("CREATE INDEX IF NOT EXISTS agent_schedules_due_idx ON agent_schedules(next_run) WHERE enabled = TRUE AND paused = FALSE")
         conn.commit()
 
 
@@ -111,7 +112,7 @@ def list_schedules(db, user_id):
     ensure_schedule_table(db)
     with psycopg.connect(db) as conn, conn.cursor() as cur:
         cur.execute(
-            """SELECT id, request, frequency, local_time, timezone, next_run
+            """SELECT id, request, frequency, local_time, timezone, next_run, paused
                FROM agent_schedules WHERE user_id=%s AND enabled=TRUE ORDER BY id DESC LIMIT 50""",
             (str(user_id),)
         )
@@ -124,6 +125,19 @@ def cancel_schedule(db, user_id, ident):
         cur.execute(
             "UPDATE agent_schedules SET enabled=FALSE WHERE id=%s AND user_id=%s AND enabled=TRUE",
             (int(ident), str(user_id))
+        )
+        changed = cur.rowcount == 1
+        conn.commit()
+        return changed
+
+
+def set_schedule_paused(db, user_id, ident, paused):
+    """Pause or resume an existing recurring task without deleting it."""
+    ensure_schedule_table(db)
+    with psycopg.connect(db) as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE agent_schedules SET paused=%s WHERE id=%s AND user_id=%s AND enabled=TRUE",
+            (bool(paused), int(ident), str(user_id)),
         )
         changed = cur.rowcount == 1
         conn.commit()
