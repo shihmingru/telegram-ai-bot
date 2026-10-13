@@ -22,7 +22,7 @@ from platform_tools import (
 from agent_features import (add_memory, list_memories, forget_memory, memory_context, add_task, list_tasks, complete_task, add_reminder, due_reminders, mark_reminder_sent, fail_reminder, skill_for)
 from scheduled_tasks import add_schedule, list_schedules, cancel_schedule, set_schedule_paused, edit_schedule
 from agent_runtime import AgentBudget, compact_tool_result, runtime_guidance, run_parallel_analysis
-from agent_skills import list_skills, get_skill, propose_skill, list_pending_skills, decide_skill
+from agent_skills import list_skills, get_skill, propose_skill, list_pending_skills, decide_skill, delete_custom_skill
 from safe_web import safe_get
 from reverse_image_fallback import (
     is_reverse_image_search_request,
@@ -1304,7 +1304,7 @@ def process_message(update_data):
         print("Received message. Text present:", bool(text), "media parts:", len(media_parts), flush=True)
 
         command = text.strip().split()
-        personal_commands = {"/remember", "/memories", "/forget", "/task", "/tasks", "/done", "/remind", "/schedule", "/schedules", "/unschedule", "/pause-schedule", "/resume-schedule", "/edit-schedule", "/skills", "/skill", "/skill-create", "/skill-update", "/skill-pending", "/skill-approve", "/skill-reject"}
+        personal_commands = {"/remember", "/memories", "/forget", "/task", "/tasks", "/done", "/remind", "/schedule", "/schedules", "/unschedule", "/pause-schedule", "/resume-schedule", "/edit-schedule", "/skills", "/skill", "/skill-create", "/skill-update", "/skill-pending", "/skill-approve", "/skill-reject", "/skill-delete"}
         skill_commands = {"/skills", "/skill", "/skill-create", "/skill-update", "/skill-pending", "/skill-approve", "/skill-reject"}
         if command and command[0].split("@")[0] in personal_commands and chat.get("type") != "private":
             send_telegram_message(chat_id, "For privacy, use personal memory, task, and reminder commands in a private chat with the bot.")
@@ -1369,6 +1369,19 @@ def process_message(update_data):
                     send_telegram_message(chat_id, "Skill proposal #" + str(ident) + " is pending. It is not active until approved with /skill-approve " + str(ident) + ".")
                 except Exception as error:
                     send_telegram_message(chat_id, "I could not stage that skill: " + str(error))
+            return
+        if command and command[0].split("@")[0] == "/skill-delete":
+            name = text.partition(" ")[2].strip()
+            if not name:
+                send_telegram_message(chat_id, "Use /skill-delete EXACT CUSTOM SKILL NAME. Built-in skills are protected.")
+            else:
+                try:
+                    removed = delete_custom_skill(DATABASE_URL, name)
+                    send_telegram_message(chat_id, "Custom skill deleted." if removed else "No custom skill found with that name.")
+                except ValueError as error:
+                    send_telegram_message(chat_id, str(error))
+                except Exception:
+                    send_telegram_message(chat_id, "I could not delete that custom skill right now.")
             return
         if command and command[0].split("@")[0] == "/skill-pending":
             try:
