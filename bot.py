@@ -1330,13 +1330,13 @@ def process_message(update_data):
             send_telegram_message(
                 chat_id,
                 "Current capabilities:\n"
-                "- Web search, opening pages, same-site crawling, multi-angle parallel research, and private conversation-history search.\n"
+                "- Web search, opening pages, same-site crawling, multi-angle parallel research, bounded parallel analysis, and private conversation-history search.\n"
                 "- Image, audio, video, PDF, and supported document input when the configured Gemini model accepts the format.\n"
-                "- Conversation history search, saved memories, tasks, reminders, and daily/weekly recurring schedules with pause/resume/edit/cancel.\n"
+                "- Conversation history search, saved memories, tasks, retryable one-shot reminders, and daily/weekly schedules with pause/resume/edit/cancel.\n"
                 "- Built-in coaching skills plus owner-managed reusable skills with approval before activation.\n"
                 "- Owner-gated GitHub, Render, Todoist, and Google Calendar tools when credentials are configured.\n"
                 "- Explicit approval for supported external changes.\n\n"
-                "Current limitations: no guaranteed Hermes feature parity; no unrestricted terminal or file-system execution, general browser interaction, true isolated subagents, MCP/plugin registry, or full multi-platform gateway. Free AI and hosting quotas can limit availability. Use /skills and /schedules for details."
+                "Current limitations: no guaranteed Hermes feature parity; no unrestricted terminal or file-system execution, general browser interaction, true isolated subagents, MCP/plugin registry, or full multi-platform gateway. Parallel analysis is not isolated execution. Free AI and hosting quotas can limit availability. Use /skills and /schedules for details."
             )
             return
         if command and command[0].split("@")[0] == "/skills":
