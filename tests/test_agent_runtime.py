@@ -1,6 +1,6 @@
 import unittest
 
-from agent_runtime import AgentBudget, compact_tool_result, list_skill_names, runtime_guidance
+from agent_runtime import AgentBudget, compact_tool_result, list_skill_names, runtime_guidance, run_parallel_analysis
 
 
 class AgentBudgetTests(unittest.TestCase):
@@ -33,6 +33,23 @@ class AgentBudgetTests(unittest.TestCase):
         names = list_skill_names()
         self.assertIn("french", names)
         self.assertIn("buddhist studies", names)
+
+
+    def test_parallel_analysis_runs_bounded_tasks(self):
+        result = run_parallel_analysis(
+            ["summarize argument A", "summarize argument B"],
+            lambda task: "result for " + task,
+        )
+        self.assertEqual(result["tasks_completed"], 2)
+        self.assertFalse(result["isolated_agent"])
+        self.assertEqual(len(result["results"]), 2)
+        self.assertIn("no paid fallback", result["note"])
+
+    def test_parallel_analysis_rejects_too_many_tasks(self):
+        result = run_parallel_analysis(
+            ["one", "two", "three", "four"], lambda task: task
+        )
+        self.assertIn("error", result)
 
     def test_runtime_guidance_includes_cost_and_verification_rules(self):
         guidance = runtime_guidance()
