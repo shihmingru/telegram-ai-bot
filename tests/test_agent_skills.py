@@ -1,6 +1,6 @@
 import unittest
 
-from agent_skills import validate_skill
+from agent_skills import validate_skill, delete_custom_skill
 
 
 class SkillValidationTests(unittest.TestCase):
@@ -17,6 +17,10 @@ class SkillValidationTests(unittest.TestCase):
     def test_rejects_too_short_instructions(self):
         with self.assertRaises(ValueError):
             validate_skill("review", "too short")
+
+    def test_builtin_skills_cannot_be_deleted(self):
+        with self.assertRaisesRegex(ValueError, "Built-in skills cannot be deleted"):
+            delete_custom_skill("unused-database", "French")
 
     def test_rejects_oversized_instructions(self):
         with self.assertRaises(ValueError):
