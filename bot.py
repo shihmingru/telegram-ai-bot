@@ -20,6 +20,7 @@ from platform_tools import (
 )
 from agent_features import (add_memory, list_memories, forget_memory, memory_context, add_task, list_tasks, complete_task, add_reminder, due_reminders, skill_for)
 from scheduled_tasks import add_schedule, list_schedules, cancel_schedule
+from agent_runtime import AgentBudget, compact_tool_result, runtime_guidance
 from safe_web import safe_get
 from reverse_image_fallback import (
     is_reverse_image_search_request,
@@ -920,6 +921,7 @@ Describe what is actually visible or audible, distinguish observation from infer
 If the user includes a URL, use web_open to inspect it when its contents matter; do not treat a URL as if you have read it.
 You can answer normally when web tools are unnecessary. You may use multiple tool calls when needed, but stop when you have enough evidence.
 """
+    system_instruction += "\\n\\n" + runtime_guidance()
 
     tools = build_agent_tools(user_id)
     initial_parts = [types.Part.from_text(text=prompt)]
@@ -927,8 +929,9 @@ You can answer normally when web tools are unnecessary. You may use multiple too
         initial_parts.extend(media_parts)
     contents = [types.Content(role="user", parts=initial_parts)]
 
-    for step in range(6):
-        print("Agent reasoning/tool step:", step + 1, flush=True)
+    budget = AgentBudget(max_steps=6, max_tool_calls=12)
+    while budget.begin_step():
+        print("Agent reasoning/tool step:", budget.steps_used, flush=True)
 
         try:
             print("Trying configured Gemini model: " + GEMINI_MODEL, flush=True)
@@ -956,26 +959,24 @@ You can answer normally when web tools are unnecessary. You may use multiple too
         for function_call in function_calls:
             name = getattr(function_call, "name", "") or ""
             args = getattr(function_call, "args", {}) or {}
-            print(
-                "Agent selected tool: "
-                + name
-                + " args="
-                + repr(args),
-                flush=True,
-            )
+            if not budget.record_tool_call(name):
+                result = {"error": "Tool-call budget exhausted for this run. No further tools were executed."}
+                print("Agent tool-call budget exhausted.", flush=True)
+            else:
+                print("Agent selected tool:", name, flush=True)
+                try:
+                    result = execute_agent_tool(name, dict(args), user_id=user_id)
+                except Exception as error:
+                    result = {"error": "Tool execution failed: " + type(error).__name__}
+                    print("Agent tool execution failed:", type(error).__name__, flush=True)
 
-            try:
-                result = execute_agent_tool(name, dict(args), user_id=user_id)
-            except Exception as error:
-                result = {
-                    "error": "Tool execution failed: " + repr(error)
-                }
-                print(
-                    "Agent tool execution failed: "
-                    + repr(error),
-                    flush=True,
-                )
+            result = compact_tool_result(result)
 
+            # Do not log tool arguments or raw exception messages: they may contain private data.
+            # The model receives bounded, JSON-safe tool results only.
+
+            # Existing approval handling remains authoritative for external mutations.
+            if False:
             contents.append(
                 types.Content(
                     role="user",
