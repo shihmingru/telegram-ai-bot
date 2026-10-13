@@ -155,7 +155,8 @@ def edit_schedule(db, user_id, ident, text):
         cur.execute(
             """UPDATE agent_schedules
                SET request=%s, frequency=%s, local_time=%s, timezone=%s,
-                   next_run=%s, paused=FALSE
+                   next_run=%s, paused=FALSE, retry_at=NULL,
+                   failure_count=0, last_error=NULL
                WHERE id=%s AND user_id=%s AND enabled=TRUE""",
             (request, frequency, clock, timezone, due, int(ident), str(user_id)),
         )
