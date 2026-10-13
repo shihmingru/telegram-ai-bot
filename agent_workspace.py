@@ -68,6 +68,7 @@ def read_file(db: str, user_id: str, filename: str, start: int = 0, length: int 
     if not row:
         return None
     content = row[0]
+    offset = min(offset, len(content))
     excerpt = content[offset:offset + size]
     end = min(len(content), offset + len(excerpt))
     return {
