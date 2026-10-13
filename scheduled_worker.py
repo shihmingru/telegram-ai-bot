@@ -94,45 +94,75 @@ def execute(request):
 
 
 def main():
-    # Claim due rows and advance their next-run timestamps in a transaction to avoid duplicates.
+    # Migrate first, then claim due rows and advance their normal schedule.
+    # A retry keeps next_run unchanged and is tracked separately by retry_at.
     with psycopg.connect(DB) as conn, conn.cursor() as cur:
         cur.execute("ALTER TABLE agent_schedules ADD COLUMN IF NOT EXISTS paused BOOLEAN NOT NULL DEFAULT FALSE")
+        cur.execute("ALTER TABLE agent_schedules ADD COLUMN IF NOT EXISTS retry_at TIMESTAMPTZ")
+        cur.execute("ALTER TABLE agent_schedules ADD COLUMN IF NOT EXISTS failure_count INTEGER NOT NULL DEFAULT 0")
+        cur.execute("ALTER TABLE agent_schedules ADD COLUMN IF NOT EXISTS last_error TEXT")
         cur.execute("""
-            SELECT id, user_id, chat_id, request, frequency, local_time, timezone
+            SELECT id, user_id, chat_id, request, frequency, local_time, timezone,
+                   next_run, retry_at, failure_count, (next_run <= NOW()) AS normal_due
             FROM agent_schedules
-            WHERE enabled=TRUE AND paused=FALSE AND next_run <= NOW()
-            ORDER BY next_run
+            WHERE enabled=TRUE AND paused=FALSE
+              AND (next_run <= NOW() OR retry_at <= NOW())
+            ORDER BY LEAST(next_run, COALESCE(retry_at, next_run))
             LIMIT 20
             FOR UPDATE SKIP LOCKED
         """)
         rows = cur.fetchall()
-        for ident, user_id, chat_id, request, frequency, local_time, timezone in rows:
-            zone = ZoneInfo(timezone)
-            now = datetime.now(zone)
-            hour, minute = map(int, local_time.split(":"))
-            next_run = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-            if frequency == "daily":
-                next_run += timedelta(days=1)
+        for row in rows:
+            ident, user_id, chat_id, request, frequency, local_time, timezone, current_next_run, retry_at, failure_count, normal_due = row
+            if normal_due:
+                zone = ZoneInfo(timezone)
+                now = datetime.now(zone)
+                hour, minute = map(int, local_time.split(":"))
+                next_run = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                if next_run <= now:
+                    next_run += timedelta(days=1 if frequency == "daily" else 7)
+                cur.execute(
+                    "UPDATE agent_schedules SET next_run=%s, retry_at=NULL, last_run=NOW() WHERE id=%s",
+                    (next_run, ident),
+                )
             else:
-                next_run += timedelta(days=7)
-            cur.execute(
-                "UPDATE agent_schedules SET next_run=%s, last_run=NOW() WHERE id=%s",
-                (next_run, ident),
-            )
+                # Consume this retry slot before releasing the transaction.
+                cur.execute("UPDATE agent_schedules SET retry_at=NULL WHERE id=%s", (ident,))
         conn.commit()
 
     print(f"Claimed {len(rows)} due scheduled task(s).", flush=True)
-    for ident, user_id, chat_id, request, frequency, local_time, timezone in rows:
+    for row in rows:
+        ident, user_id, chat_id, request, frequency, local_time, timezone, current_next_run, retry_at, failure_count, normal_due = row
         try:
             result = execute(request)
-            send(chat_id, f"Scheduled task #{ident}\n\n{result}")
+            send(chat_id, f"Scheduled task #{ident}\\n\\n{result}")
+            with psycopg.connect(DB) as conn, conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE agent_schedules SET failure_count=0, last_error=NULL, retry_at=NULL WHERE id=%s",
+                    (ident,),
+                )
+                conn.commit()
             print(f"Task {ident} delivered.", flush=True)
         except Exception as exc:
-            print(f"Task {ident} failed:", repr(exc), flush=True)
+            safe_error = type(exc).__name__ + ": " + str(exc)[:350]
+            print(f"Task {ident} failed ({type(exc).__name__}).", flush=True)
+            # Three total attempts per scheduled occurrence; retry after 15 minutes.
             try:
-                send(chat_id, f"Scheduled task #{ident} could not complete this run. Error: {str(exc)[:500]}. It remains scheduled for its next run; no paid fallback was attempted.")
+                with psycopg.connect(DB) as conn, conn.cursor() as cur:
+                    cur.execute(
+                        """UPDATE agent_schedules
+                           SET failure_count=failure_count+1, last_error=%s,
+                               retry_at=CASE WHEN failure_count < 2 THEN NOW()+INTERVAL '15 minutes' ELSE NULL END
+                           WHERE id=%s""",
+                        (safe_error, ident),
+                    )
+                    conn.commit()
+            except Exception as db_error:
+                print(f"Task {ident} retry state could not be saved ({type(db_error).__name__}).", flush=True)
+            try:
+                send(chat_id, f"Scheduled task #{ident} failed this run. It will retry up to three times when possible; no paid fallback was attempted.")
             except Exception as send_exc:
-                print(f"Task {ident} failure notice could not be delivered:", repr(send_exc), flush=True)
+                print(f"Task {ident} failure notice could not be delivered ({type(send_exc).__name__}).", flush=True)
 
 
 if __name__ == "__main__":
