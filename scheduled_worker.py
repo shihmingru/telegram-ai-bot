@@ -6,6 +6,7 @@ import requests
 import psycopg
 from google import genai
 from google.genai import types
+from agent_features import due_reminders, mark_reminder_sent, fail_reminder
 
 DB = os.environ["DATABASE_URL"]
 TOKEN = os.environ["TELEGRAM_TOKEN"]
@@ -93,6 +94,28 @@ def execute(request):
     return result
 
 
+def deliver_due_reminders():
+    """Deliver due one-shot reminders independently of incoming Telegram messages."""
+    try:
+        reminders = due_reminders(DB, limit=50)
+    except Exception as error:
+        print(f"Reminder claim failed ({type(error).__name__}).", flush=True)
+        return
+    delivered = 0
+    for chat_id, message, ident, attempts in reminders:
+        try:
+            send(chat_id, "Reminder: " + message)
+            mark_reminder_sent(DB, ident)
+            delivered += 1
+        except Exception as error:
+            try:
+                fail_reminder(DB, ident, type(error).__name__)
+            except Exception as db_error:
+                print(f"Reminder #{ident} retry state failed ({type(db_error).__name__}).", flush=True)
+            print(f"Reminder #{ident} delivery failed ({type(error).__name__}); attempt {attempts}.", flush=True)
+    print(f"Delivered {delivered} one-shot reminder(s).", flush=True)
+
+
 def main():
     # Migrate first, then claim due rows and advance their normal schedule.
     # A retry keeps next_run unchanged and is tracked separately by retry_at.
@@ -131,6 +154,7 @@ def main():
         conn.commit()
 
     print(f"Claimed {len(rows)} due scheduled task(s).", flush=True)
+    deliver_due_reminders()
     for row in rows:
         ident, user_id, chat_id, request, frequency, local_time, timezone, current_next_run, retry_at, failure_count, normal_due = row
         try:
