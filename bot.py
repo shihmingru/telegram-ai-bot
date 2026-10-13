@@ -23,6 +23,7 @@ from agent_features import (add_memory, list_memories, forget_memory, memory_con
 from scheduled_tasks import add_schedule, list_schedules, cancel_schedule, set_schedule_paused, edit_schedule
 from agent_runtime import AgentBudget, compact_tool_result, runtime_guidance, run_parallel_analysis
 from agent_skills import list_skills, get_skill, propose_skill, list_pending_skills, decide_skill, delete_custom_skill
+from agent_workspace import list_files, read_file, save_file, delete_file
 from safe_web import safe_get
 from reverse_image_fallback import (
     is_reverse_image_search_request,
@@ -722,6 +723,30 @@ def build_agent_tools(user_id=None):
                     },
                 ),
                 types.FunctionDeclaration(
+                    name="workspace_list",
+                    description="List text files saved in the current Telegram user's private PostgreSQL workspace.",
+                    parameters={"type": "OBJECT", "properties": {}},
+                ),
+                types.FunctionDeclaration(
+                    name="workspace_read",
+                    description="Read one text file from the current Telegram user's private workspace by exact filename.",
+                    parameters={"type": "OBJECT", "properties": {
+                        "filename": {"type": "STRING"},
+                    }, "required": ["filename"]},
+                ),
+                types.FunctionDeclaration(
+                    name="workspace_save",
+                    description=(
+                        "Save text or source code as a file in the current user's private PostgreSQL workspace. "
+                        "Text only, up to 50,000 characters; this does not execute code. Existing files are not replaced unless overwrite=true."
+                    ),
+                    parameters={"type": "OBJECT", "properties": {
+                        "filename": {"type": "STRING"},
+                        "content": {"type": "STRING"},
+                        "overwrite": {"type": "BOOLEAN"},
+                    }, "required": ["filename", "content"]},
+                ),
+                types.FunctionDeclaration(
                     name="session_search",
                     description="Search the current Telegram user's saved conversation history for earlier discussions. Return matching excerpts only from that user's own history.",
                     parameters={
@@ -851,6 +876,23 @@ def execute_agent_tool(name, args, user_id=None):
             return {"proposal_id": ident, "status": "pending_approval", "instruction": "The skill is not active until the owner approves it with /skill-approve ID."}
         except Exception as error:
             return {"error": str(error)}
+    if name in {"workspace_list", "workspace_read", "workspace_save"}:
+        if user_id is None:
+            return {"error": "A Telegram user identity is required for private workspace access."}
+        try:
+            if name == "workspace_list":
+                return {"files": list_files(DATABASE_URL, user_id)}
+            if name == "workspace_read":
+                result = read_file(DATABASE_URL, user_id, str(args.get("filename", "")))
+                return result or {"error": "No file with that name exists in your private workspace."}
+            return save_file(
+                DATABASE_URL, user_id, str(args.get("filename", "")),
+                str(args.get("content", "")), bool(args.get("overwrite", False)),
+            )
+        except ValueError as error:
+            return {"error": str(error)}
+        except Exception as error:
+            return {"error": "Workspace operation failed: " + type(error).__name__}
     platform_names = {
         "github_search_repositories", "github_get_file", "github_create_issue",
         "render_list_services", "render_list_deploys", "render_trigger_deploy",
@@ -1304,7 +1346,7 @@ def process_message(update_data):
         print("Received message. Text present:", bool(text), "media parts:", len(media_parts), flush=True)
 
         command = text.strip().split()
-        personal_commands = {"/remember", "/memories", "/forget", "/task", "/tasks", "/done", "/remind", "/schedule", "/schedules", "/unschedule", "/pause-schedule", "/resume-schedule", "/edit-schedule", "/skills", "/skill", "/skill-create", "/skill-update", "/skill-pending", "/skill-approve", "/skill-reject", "/skill-delete"}
+        personal_commands = {"/remember", "/memories", "/forget", "/task", "/tasks", "/done", "/remind", "/schedule", "/schedules", "/unschedule", "/pause-schedule", "/resume-schedule", "/edit-schedule", "/skills", "/skill", "/skill-create", "/skill-update", "/skill-pending", "/skill-approve", "/skill-reject", "/skill-delete", "/files", "/file", "/file-delete"}
         skill_commands = {"/skills", "/skill", "/skill-create", "/skill-update", "/skill-pending", "/skill-approve", "/skill-reject", "/skill-delete"}
         if command and command[0].split("@")[0] in personal_commands and chat.get("type") != "private":
             send_telegram_message(chat_id, "For privacy, use personal memory, task, and reminder commands in a private chat with the bot.")
@@ -1338,6 +1380,40 @@ def process_message(update_data):
                 "- Explicit approval for supported external changes.\n\n"
                 "Current limitations: no guaranteed Hermes feature parity; no unrestricted terminal or file-system execution, general browser interaction, true isolated subagents, MCP/plugin registry, or full multi-platform gateway. Parallel analysis is not isolated execution. Free AI and hosting quotas can limit availability. Use /skills and /schedules for details."
             )
+            return
+        if command and command[0].split("@")[0] == "/files":
+            try:
+                rows = list_files(DATABASE_URL, user_id)
+                listing = "\\n".join(f"{item['filename']} ({item['characters']} characters)" for item in rows)
+                send_telegram_message(chat_id, "Your private text workspace:\\n" + listing if rows else "Your private text workspace is empty. Ask me to save text as a named file.")
+            except Exception:
+                send_telegram_message(chat_id, "I could not list your workspace files right now.")
+            return
+        if command and command[0].split("@")[0] == "/file":
+            filename = text.partition(" ")[2].strip()
+            if not filename:
+                send_telegram_message(chat_id, "Use /file FILENAME to read a saved text file.")
+            else:
+                try:
+                    item = read_file(DATABASE_URL, user_id, filename)
+                    send_telegram_message(chat_id, (item["filename"] + "\\n\\n" + item["content"][:3500]) if item else "No file with that name exists in your private workspace.")
+                except ValueError as error:
+                    send_telegram_message(chat_id, str(error))
+                except Exception:
+                    send_telegram_message(chat_id, "I could not read that workspace file right now.")
+            return
+        if command and command[0].split("@")[0] == "/file-delete":
+            filename = text.partition(" ")[2].strip()
+            if not filename:
+                send_telegram_message(chat_id, "Use /file-delete EXACT FILENAME to delete one of your saved text files.")
+            else:
+                try:
+                    removed = delete_file(DATABASE_URL, user_id, filename)
+                    send_telegram_message(chat_id, "Workspace file deleted." if removed else "No file with that name exists in your private workspace.")
+                except ValueError as error:
+                    send_telegram_message(chat_id, str(error))
+                except Exception:
+                    send_telegram_message(chat_id, "I could not delete that workspace file right now.")
             return
         if command and command[0].split("@")[0] == "/skills":
             try:
