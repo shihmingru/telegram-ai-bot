@@ -126,7 +126,7 @@ def main():
         cur.execute("ALTER TABLE agent_schedules ADD COLUMN IF NOT EXISTS last_error TEXT")
         cur.execute("""
             SELECT id, user_id, chat_id, request, frequency, local_time, timezone,
-                   next_run, retry_at, failure_count, (next_run <= NOW()) AS normal_due
+                   next_run, retry_at, CASE WHEN next_run <= NOW() THEN 0 ELSE failure_count END AS failure_count, (next_run <= NOW()) AS normal_due
             FROM agent_schedules
             WHERE enabled=TRUE AND paused=FALSE
               AND (next_run <= NOW() OR retry_at <= NOW())
@@ -145,7 +145,7 @@ def main():
                 if next_run <= now:
                     next_run += timedelta(days=1 if frequency == "daily" else 7)
                 cur.execute(
-                    "UPDATE agent_schedules SET next_run=%s, retry_at=NULL, last_run=NOW() WHERE id=%s",
+                    "UPDATE agent_schedules SET next_run=%s, retry_at=NULL, last_run=NOW(), failure_count=0, last_error=NULL WHERE id=%s",
                     (next_run, ident),
                 )
             else:
