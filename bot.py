@@ -1349,7 +1349,7 @@ def process_message(update_data):
         if command and command[0].split("@")[0] == "/skill":
             name = text.partition(" ")[2].strip()
             if not name:
-                send_telegram_message(chat_id, "Use /skill NAME to read a skill. Create or update one with /skill-create NAME | instructions or /skill-update NAME | instructions. Review with /skill-pending, then /skill-approve ID or /skill-reject ID.")
+                send_telegram_message(chat_id, "Use /skill NAME to read a skill. Create or update one with /skill-create NAME | instructions or /skill-update NAME | instructions. Review with /skill-pending, then /skill-approve ID or /skill-reject ID. Delete a custom skill with /skill-delete NAME.")
             else:
                 try:
                     skill = get_skill(DATABASE_URL, name)
