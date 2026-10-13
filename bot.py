@@ -2,6 +2,7 @@ import os
 import hashlib
 import mimetypes
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import re
 from html.parser import HTMLParser
 from urllib.parse import parse_qs, quote_plus, unquote, urljoin, urlparse
@@ -719,6 +720,21 @@ def build_agent_tools(user_id=None):
                     },
                 ),
                 types.FunctionDeclaration(
+                    name="web_research",
+                    description=(
+                        "Research a question from several independent angles using the existing no-key public search. "
+                        "Provide 2 to 4 distinct queries. Runs searches concurrently, deduplicates URLs, and returns "
+                        "source titles, URLs, snippets, and retrieved page text. It does not guarantee exhaustive coverage."
+                    ),
+                    parameters={
+                        "type": "OBJECT",
+                        "properties": {
+                            "queries": {"type": "ARRAY", "items": {"type": "STRING"}, "minItems": 2, "maxItems": 4},
+                        },
+                        "required": ["queries"],
+                    },
+                ),
+                types.FunctionDeclaration(
                     name="web_open",
                     description=(
                         "Open a specific public HTTP or HTTPS webpage and read its text and links. "
@@ -824,6 +840,32 @@ def execute_agent_tool(name, args, user_id=None):
         return execute_platform_tool(name, args, allow_mutation=False)
 
     """Execute one agent-selected tool and return JSON-safe data."""
+    if name == "web_research":
+        queries = args.get("queries") or []
+        if not isinstance(queries, list):
+            return {"error": "queries must be a list of 2 to 4 distinct search questions."}
+        queries = list(dict.fromkeys(str(q).strip()[:500] for q in queries if str(q).strip()))
+        if not 2 <= len(queries) <= 4:
+            return {"error": "Provide 2 to 4 distinct search questions."}
+        combined = []
+        seen_urls = set()
+        with ThreadPoolExecutor(max_workers=min(4, len(queries))) as pool:
+            futures = {pool.submit(free_web_search, query, 4): query for query in queries}
+            for future in as_completed(futures):
+                query = futures[future]
+                try:
+                    results = future.result()
+                except Exception as error:
+                    combined.append({"query": query, "error": type(error).__name__, "results": []})
+                    continue
+                unique = []
+                for item in results:
+                    url = item.get("url")
+                    if url and url not in seen_urls:
+                        seen_urls.add(url)
+                        unique.append(item)
+                combined.append({"query": query, "results": unique})
+        return {"queries_run": queries, "unique_source_count": len(seen_urls), "workstreams": combined}
     if name == "web_search":
         query = str(args.get("query", "")).strip()
         if not query:
