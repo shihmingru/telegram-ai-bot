@@ -54,8 +54,10 @@ def list_files(db: str, user_id: str) -> list[dict]:
         return [{"filename": name, "characters": size, "updated_at": updated.isoformat()} for name, size, updated in cur.fetchall()]
 
 
-def read_file(db: str, user_id: str, filename: str) -> dict | None:
+def read_file(db: str, user_id: str, filename: str, start: int = 0, length: int = 9000) -> dict | None:
     name = validate_filename(filename)
+    offset = max(0, int(start))
+    size = max(1, min(int(length), 9000))
     ensure_workspace_table(db)
     with psycopg.connect(db) as conn, conn.cursor() as cur:
         cur.execute(
@@ -63,7 +65,20 @@ def read_file(db: str, user_id: str, filename: str) -> dict | None:
             (str(user_id), name),
         )
         row = cur.fetchone()
-    return {"filename": name, "content": row[0], "updated_at": row[1].isoformat()} if row else None
+    if not row:
+        return None
+    content = row[0]
+    excerpt = content[offset:offset + size]
+    end = min(len(content), offset + len(excerpt))
+    return {
+        "filename": name,
+        "content": excerpt,
+        "start": offset,
+        "end": end,
+        "total_characters": len(content),
+        "has_more": end < len(content),
+        "updated_at": row[1].isoformat(),
+    }
 
 
 def save_file(db: str, user_id: str, filename: str, content: str, overwrite: bool = False) -> dict:
