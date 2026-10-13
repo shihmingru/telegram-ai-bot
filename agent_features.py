@@ -133,3 +133,11 @@ def fail_reminder(db, ident, error):
         changed = cur.rowcount == 1
         conn.commit()
         return changed
+
+
+def skill_for(text):
+    value = (text or "").lower()
+    for key, prompt in SKILLS.items():
+        if key.lower() in value:
+            return prompt
+    return ""
