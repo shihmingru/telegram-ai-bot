@@ -126,3 +126,20 @@ def runtime_guidance() -> str:
         "- Use available coaching skills when relevant: " + skills + ". Do not claim a skill is persisted unless it was saved.\n"
         "- Keep answers concise, useful, and explicit about uncertainty."
     )
+
+
+def collect_limited_bytes(chunks, max_bytes: int) -> bytes:
+    """Collect streamed response chunks without exceeding a strict byte limit."""
+    limit = int(max_bytes)
+    if limit < 1:
+        raise ValueError("max_bytes must be positive")
+    collected = []
+    total = 0
+    for chunk in chunks:
+        if not chunk:
+            continue
+        total += len(chunk)
+        if total > limit:
+            raise ValueError("Downloaded content exceeded the configured byte limit.")
+        collected.append(chunk)
+    return b"".join(collected)
