@@ -3,3 +3,4 @@ google-genai
 flask
 psycopg[binary]
 requests==2.32.5
+PyJWT[crypto]==2.10.1
