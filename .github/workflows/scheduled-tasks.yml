@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 concurrency:
   group: recurring-telegram-tasks
@@ -18,38 +19,46 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-      - name: Check opt-in and required repository secrets
+      - name: Check opt-in and required service configuration
         id: check-ready
         env:
           ENABLE_RECURRING_TASKS: ${{ vars.ENABLE_RECURRING_TASKS }}
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          RENDER_URL: ${{ vars.RENDER_URL }}
         run: |
           if [ "$ENABLE_RECURRING_TASKS" != "true" ]; then
             echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "Worker skipped: set Actions variable ENABLE_RECURRING_TASKS=true only after confirming the Gemini API project is Free Tier with no billing account linked."
-          elif [ -z "$DATABASE_URL" ] || [ -z "$TELEGRAM_TOKEN" ] || [ -z "$GEMINI_API_KEY" ]; then
+            echo "Worker skipped: recurring tasks are not enabled. Set repository variable ENABLE_RECURRING_TASKS=true after confirming your Gemini project has no billing account linked."
+          elif [ -z "$RENDER_URL" ]; then
             echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "Worker skipped: configure DATABASE_URL, TELEGRAM_TOKEN, and GEMINI_API_KEY in repository Actions secrets."
+            echo "Worker skipped: set repository variable RENDER_URL to the existing Render service URL."
           else
             echo "ready=true" >> "$GITHUB_OUTPUT"
           fi
-      - name: Set up Python
+      - name: Request a short-lived GitHub OIDC token
         if: ${{ steps.check-ready.outputs.ready == 'true' }}
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Install existing dependencies
-        if: ${{ steps.check-ready.outputs.ready == 'true' }}
-        run: pip install -r requirements.txt
-      - name: Run due tasks
+        id: oidc
+        env:
+          ACTIONS_ID_TOKEN_REQUEST_URL: ${{ env.ACTIONS_ID_TOKEN_REQUEST_URL }}
+          ACTIONS_ID_TOKEN_REQUEST_TOKEN: ${{ env.ACTIONS_ID_TOKEN_REQUEST_TOKEN }}
+          RENDER_URL: ${{ vars.RENDER_URL }}
+        run: |
+          set -euo pipefail
+          TOKEN_URL="${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=$(python -c 'import os,urllib.parse; print(urllib.parse.quote(os.environ["RENDER_URL"].rstrip("/"), safe=""))')"
+          RESPONSE=$(curl --fail --silent --show-error -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$TOKEN_URL")
+          echo "token=$(python -c 'import json,sys; print(json.load(sys.stdin)["value"])' <<< "$RESPONSE")" >> "$GITHUB_OUTPUT"
+      - name: Trigger the existing Render worker
         if: ${{ steps.check-ready.outputs.ready == 'true' }}
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
-        run: python scheduled_worker.py
+          RENDER_URL: ${{ vars.RENDER_URL }}
+          OIDC_TOKEN: ${{ steps.oidc.outputs.token }}
+        run: |
+          set -euo pipefail
+          CODE=$(curl --silent --show-error --output /tmp/worker-response.txt --write-out "%{http_code}" \
+            --request POST \
+            --header "Authorization: Bearer $OIDC_TOKEN" \
+            "$RENDER_URL/_internal/run-scheduled-tasks")
+          cat /tmp/worker-response.txt
+          if [ "$CODE" != "202" ] && [ "$CODE" != "409" ]; then
+            echo "Render worker trigger failed with HTTP $CODE"
+            exit 1
+          fi
