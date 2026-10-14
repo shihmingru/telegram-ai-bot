@@ -1,6 +1,6 @@
 import unittest
 
-from agent_runtime import AgentBudget, compact_tool_result, list_skill_names, runtime_guidance, run_parallel_analysis
+from agent_runtime import AgentBudget, collect_limited_bytes, compact_tool_result, list_skill_names, runtime_guidance, run_parallel_analysis
 
 
 class AgentBudgetTests(unittest.TestCase):
@@ -18,6 +18,17 @@ class AgentBudgetTests(unittest.TestCase):
         self.assertFalse(budget.record_tool_call("web_crawl"))
         self.assertEqual(budget.remaining_tool_calls, 0)
         self.assertEqual(budget.tools_used, ["web_search", "web_open"])
+
+    def test_streamed_download_stays_within_byte_limit(self):
+        self.assertEqual(collect_limited_bytes([b"abc", b"def"], 6), b"abcdef")
+
+    def test_streamed_download_rejects_over_limit(self):
+        with self.assertRaises(ValueError):
+            collect_limited_bytes([b"abc", b"def"], 5)
+
+    def test_streamed_download_rejects_nonpositive_limit(self):
+        with self.assertRaises(ValueError):
+            collect_limited_bytes([b"abc"], 0)
 
     def test_tool_result_is_json_safe(self):
         result = compact_tool_result({"count": 2, "ok": True})
