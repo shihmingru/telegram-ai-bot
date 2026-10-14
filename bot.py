@@ -21,7 +21,7 @@ from platform_tools import (
 )
 from agent_features import (add_memory, list_memories, forget_memory, memory_context, add_task, list_tasks, complete_task, add_reminder, due_reminders, mark_reminder_sent, fail_reminder, skill_for)
 from scheduled_tasks import add_schedule, list_schedules, cancel_schedule, set_schedule_paused, edit_schedule
-from agent_runtime import AgentBudget, compact_tool_result, runtime_guidance, run_parallel_analysis
+from agent_runtime import AgentBudget, collect_limited_bytes, compact_tool_result, runtime_guidance, run_parallel_analysis
 from agent_skills import list_skills, get_skill, propose_skill, list_pending_skills, decide_skill, delete_custom_skill
 from agent_workspace import list_files, read_file, save_file, delete_file
 from safe_web import safe_get
@@ -33,6 +33,7 @@ from reverse_image_fallback import (
 
 
 PORT = int(os.environ.get("PORT", "10000"))  # Render web service
+MAX_TELEGRAM_ATTACHMENT_BYTES = 15_000_000
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
@@ -1276,23 +1277,33 @@ def get_telegram_media_parts(message):
                 mime_type,
                 flush=True,
             )
+            if file_size and file_size > MAX_TELEGRAM_ATTACHMENT_BYTES:
+                notes.append(
+                    "The attached " + label + " exceeds the bot's 15 MB safety limit. "
+                    "Please send a smaller file."
+                )
+                continue
             file_path = file_info.get("file_path")
             if not file_path:
                 raise RuntimeError("Telegram did not return a file path")
             download_url = "https://api.telegram.org/file/bot" + TELEGRAM_TOKEN + "/" + file_path
-            file_response = requests.get(download_url, timeout=45)
-            file_response.raise_for_status()
+            with requests.get(download_url, timeout=45, stream=True) as file_response:
+                file_response.raise_for_status()
+                attachment_bytes = collect_limited_bytes(
+                    file_response.iter_content(chunk_size=65536),
+                    MAX_TELEGRAM_ATTACHMENT_BYTES,
+                )
             media_parts.append(types.Part.from_bytes(
-                data=file_response.content,
+                data=attachment_bytes,
                 mime_type=mime_type,
             ))
             if search_requested and mime_type.startswith("image/") and reverse_image_bytes is None:
-                reverse_image_bytes = file_response.content
+                reverse_image_bytes = attachment_bytes
             print(
                 "Downloaded Telegram attachment for multimodal analysis:",
                 label,
                 "bytes:",
-                len(file_response.content),
+                len(attachment_bytes),
                 "Gemini media parts:",
                 len(media_parts),
                 flush=True,
