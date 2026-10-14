@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, quote_plus, unquote, urljoin, urlparse
 import xml.etree.ElementTree as ET
 
 import requests
+import jwt
 from flask import Flask, request
 import psycopg
 
@@ -45,6 +46,51 @@ RENDER_URL = os.environ.get(
 )
 
 app = Flask(__name__)
+SCHEDULED_WORKER_LOCK = threading.Lock()
+
+
+def _run_scheduled_worker():
+    try:
+        import scheduled_worker
+        scheduled_worker.main()
+    except Exception as error:
+        print("Scheduled worker failed:", type(error).__name__, flush=True)
+    finally:
+        SCHEDULED_WORKER_LOCK.release()
+
+
+@app.route("/_internal/run-scheduled-tasks", methods=["POST"])
+def trigger_scheduled_worker():
+    # GitHub Actions OIDC authenticates the caller without copying API secrets
+    # into GitHub. Restrict the token to this repository's main-branch workflow.
+    authorization = request.headers.get("Authorization", "")
+    if not authorization.startswith("Bearer "):
+        return "Unauthorized", 401
+    token = authorization[7:].strip()
+    try:
+        jwks = jwt.PyJWKClient("https://token.actions.githubusercontent.com/.well-known/jwks")
+        signing_key = jwks.get_signing_key_from_jwt(token).key
+        claims = jwt.decode(
+            token,
+            signing_key,
+            algorithms=["RS256"],
+            audience=RENDER_URL.rstrip("/"),
+            issuer="https://token.actions.githubusercontent.com",
+            options={"require": ["exp", "iat", "sub"]},
+        )
+    except Exception:
+        return "Unauthorized", 401
+    if (
+        claims.get("repository") != "shihmingru/telegram-ai-bot"
+        or claims.get("ref") != "refs/heads/main"
+        or claims.get("workflow_ref") != ".github/workflows/scheduled-tasks.yml@refs/heads/main"
+        or claims.get("event_name") not in {"schedule", "workflow_dispatch"}
+    ):
+        return "Forbidden", 403
+    if not SCHEDULED_WORKER_LOCK.acquire(blocking=False):
+        return "Scheduled worker already running", 409
+    threading.Thread(target=_run_scheduled_worker, daemon=True).start()
+    return "Scheduled worker accepted", 202
 
 
 @app.route("/")
