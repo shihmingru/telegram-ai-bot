@@ -22,6 +22,7 @@ from platform_tools import (
 from agent_features import (add_memory, list_memories, forget_memory, memory_context, add_task, list_tasks, complete_task, add_reminder, due_reminders, mark_reminder_sent, fail_reminder, skill_for)
 from scheduled_tasks import add_schedule, list_schedules, cancel_schedule, set_schedule_paused, edit_schedule
 from agent_runtime import AgentBudget, collect_limited_bytes, compact_tool_result, runtime_guidance, run_parallel_analysis
+from workflow_engine import validate_workflow, run_workflow
 from agent_skills import list_skills, get_skill, propose_skill, list_pending_skills, decide_skill, delete_custom_skill
 from agent_workspace import list_files, read_file, save_file, delete_file
 from safe_web import safe_get
@@ -830,6 +831,36 @@ def build_agent_tools(user_id=None):
                         "required": ["start_url"],
                     },
                 ),
+                types.FunctionDeclaration(
+                    name="workflow_run_readonly",
+                    description=(
+                        "Run a short sequential automation made only from allowlisted read-only actions. "
+                        "Available actions: web_search, web_open, web_crawl, workspace_list, workspace_read, session_search. "
+                        "Each step may retry up to 2 times. Stops on failure. Maximum 8 steps. "
+                        "No shell, arbitrary code, external mutations, or paid services are available in this workflow."
+                    ),
+                    parameters={
+                        "type": "OBJECT",
+                        "properties": {
+                            "steps": {
+                                "type": "ARRAY",
+                                "minItems": 1,
+                                "maxItems": 8,
+                                "items": {
+                                    "type": "OBJECT",
+                                    "properties": {
+                                        "name": {"type": "STRING"},
+                                        "action": {"type": "STRING", "enum": ["web_search", "web_open", "web_crawl", "workspace_list", "workspace_read", "session_search"]},
+                                        "params": {"type": "OBJECT"},
+                                        "retries": {"type": "INTEGER"},
+                                    },
+                                    "required": ["action"],
+                                },
+                            },
+                        },
+                        "required": ["steps"],
+                    },
+                ),
             ]
         )
     ]
@@ -863,6 +894,24 @@ def build_agent_tools(user_id=None):
 
 def execute_agent_tool(name, args, user_id=None):
     """Execute web, skill-library, or an authorized platform tool."""
+    if name == "workflow_run_readonly":
+        allowed = {"web_search", "web_open", "web_crawl", "workspace_list", "workspace_read", "session_search"}
+        try:
+            steps = validate_workflow(args.get("steps"), allowed)
+            if len(steps) > 8:
+                return {"error": "A workflow may contain at most 8 steps."}
+            for step in steps:
+                if step.retries > 2:
+                    return {"error": "Each workflow step may retry at most twice."}
+                if step.requires_approval:
+                    return {"error": "Approval-gated mutations are not available inside read-only workflows."}
+            handlers = {
+                action: (lambda params, action=action: execute_agent_tool(action, params, user_id=user_id))
+                for action in allowed
+            }
+            return run_workflow(steps, handlers)
+        except (ValueError, TypeError) as error:
+            return {"error": "Invalid workflow: " + str(error)}
     if name in {"skills_list", "skill_view", "skill_propose"}:
         if not is_platform_user(user_id):
             return {"error": "Skill-management tools are available only to the configured owner."}
