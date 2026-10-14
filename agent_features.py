@@ -19,6 +19,9 @@ def ensure_tables(database_url):
         cur.execute("CREATE TABLE IF NOT EXISTS agent_tasks (id BIGSERIAL PRIMARY KEY, user_id TEXT NOT NULL, task TEXT NOT NULL, due_at TIMESTAMPTZ, status TEXT NOT NULL DEFAULT 'open', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), completed_at TIMESTAMPTZ)")
         cur.execute("CREATE INDEX IF NOT EXISTS agent_tasks_user_idx ON agent_tasks(user_id, status, id DESC)")
         cur.execute("CREATE TABLE IF NOT EXISTS agent_reminders (id BIGSERIAL PRIMARY KEY, user_id TEXT NOT NULL, chat_id TEXT NOT NULL, message TEXT NOT NULL, due_at TIMESTAMPTZ NOT NULL, sent_at TIMESTAMPTZ, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())")
+        cur.execute("ALTER TABLE agent_reminders ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0")
+        cur.execute("ALTER TABLE agent_reminders ADD COLUMN IF NOT EXISTS retry_after TIMESTAMPTZ")
+        cur.execute("ALTER TABLE agent_reminders ADD COLUMN IF NOT EXISTS last_error TEXT")
         cur.execute("CREATE INDEX IF NOT EXISTS agent_reminders_due_idx ON agent_reminders(due_at) WHERE sent_at IS NULL")
         conn.commit()
 
@@ -72,12 +75,69 @@ def add_reminder(db, user, chat, due_text, message):
         cur.execute("INSERT INTO agent_reminders(user_id,chat_id,message,due_at) VALUES (%s,%s,%s,%s) RETURNING id", (str(user), str(chat), message, due)); ident = cur.fetchone()[0]; conn.commit(); return ident
 
 def due_reminders(db, limit=20):
+    """Claim due reminders with a lease; delivery must be confirmed separately.
+
+    The lease prevents the webhook and scheduled worker from claiming the same
+    reminder concurrently. Delivery is at-least-once, since Telegram send and
+    the database commit cannot be made one atomic transaction.
+    """
     ensure_tables(db)
     with psycopg.connect(db) as conn, conn.cursor() as cur:
-        cur.execute("WITH due AS (SELECT id FROM agent_reminders WHERE sent_at IS NULL AND due_at <= NOW() ORDER BY due_at FOR UPDATE SKIP LOCKED LIMIT %s) UPDATE agent_reminders r SET sent_at=NOW() FROM due WHERE r.id=due.id RETURNING r.chat_id,r.message,r.id", (max(1, min(int(limit), 100)),)); rows = cur.fetchall(); conn.commit(); return rows
+        cur.execute(
+            """WITH due AS (
+                   SELECT id FROM agent_reminders
+                   WHERE sent_at IS NULL AND due_at <= NOW()
+                     AND (retry_after IS NULL OR retry_after <= NOW())
+                     AND attempts < 5
+                   ORDER BY due_at
+                   FOR UPDATE SKIP LOCKED
+                   LIMIT %s
+               )
+               UPDATE agent_reminders r
+               SET retry_after=NOW()+INTERVAL '20 minutes',
+                   attempts=attempts+1
+               FROM due
+               WHERE r.id=due.id
+               RETURNING r.chat_id,r.message,r.id,r.attempts""",
+            (max(1, min(int(limit), 100)),),
+        )
+        rows = cur.fetchall()
+        conn.commit()
+        return rows
+
+
+def mark_reminder_sent(db, ident):
+    ensure_tables(db)
+    with psycopg.connect(db) as conn, conn.cursor() as cur:
+        cur.execute(
+            "UPDATE agent_reminders SET sent_at=NOW(), retry_after=NULL, last_error=NULL WHERE id=%s AND sent_at IS NULL",
+            (int(ident),),
+        )
+        changed = cur.rowcount == 1
+        conn.commit()
+        return changed
+
+
+def fail_reminder(db, ident, error):
+    """Schedule a retry for a failed delivery, up to five claimed attempts."""
+    safe_error = (str(error) or "delivery failed")[:350]
+    ensure_tables(db)
+    with psycopg.connect(db) as conn, conn.cursor() as cur:
+        cur.execute(
+            """UPDATE agent_reminders
+               SET retry_after=CASE WHEN attempts < 5 THEN NOW()+INTERVAL '5 minutes' ELSE NULL END,
+                   last_error=%s
+               WHERE id=%s AND sent_at IS NULL""",
+            (safe_error, int(ident)),
+        )
+        changed = cur.rowcount == 1
+        conn.commit()
+        return changed
+
 
 def skill_for(text):
     value = (text or "").lower()
     for key, prompt in SKILLS.items():
-        if key.lower() in value: return prompt
+        if key.lower() in value:
+            return prompt
     return ""

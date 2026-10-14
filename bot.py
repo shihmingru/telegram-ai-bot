@@ -2,6 +2,7 @@ import os
 import hashlib
 import mimetypes
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import re
 from html.parser import HTMLParser
 from urllib.parse import parse_qs, quote_plus, unquote, urljoin, urlparse
@@ -18,8 +19,12 @@ from platform_tools import (
     cancel_action, execute_approved_action, execute_platform_tool,
     platform_tool_declarations, queue_action, is_allowed_telegram_user,
 )
-from agent_features import (add_memory, list_memories, forget_memory, memory_context, add_task, list_tasks, complete_task, add_reminder, due_reminders, skill_for)
-from scheduled_tasks import add_schedule, list_schedules, cancel_schedule
+from agent_features import (add_memory, list_memories, forget_memory, memory_context, add_task, list_tasks, complete_task, add_reminder, due_reminders, mark_reminder_sent, fail_reminder, skill_for)
+from scheduled_tasks import add_schedule, list_schedules, cancel_schedule, set_schedule_paused, edit_schedule
+from agent_runtime import AgentBudget, collect_limited_bytes, compact_tool_result, runtime_guidance, run_parallel_analysis
+from workflow_engine import validate_workflow, run_workflow
+from agent_skills import list_skills, get_skill, propose_skill, list_pending_skills, decide_skill, delete_custom_skill
+from agent_workspace import list_files, read_file, save_file, delete_file
 from safe_web import safe_get
 from reverse_image_fallback import (
     is_reverse_image_search_request,
@@ -29,6 +34,7 @@ from reverse_image_fallback import (
 
 
 PORT = int(os.environ.get("PORT", "10000"))  # Render web service
+MAX_TELEGRAM_ATTACHMENT_BYTES = 15_000_000
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
@@ -640,8 +646,10 @@ def send_telegram_message(chat_id, text):
         if not payload.get("ok"):
             raise RuntimeError(payload)
         print("Telegram response sent successfully.", flush=True)
+        return True
     except Exception as error:
-        print("TELEGRAM SEND ERROR:", repr(error), flush=True)
+        print("TELEGRAM SEND ERROR:", type(error).__name__, flush=True)
+        return False
 
 
 def configure_webhook():
@@ -717,6 +725,74 @@ def build_agent_tools(user_id=None):
                     },
                 ),
                 types.FunctionDeclaration(
+                    name="workspace_list",
+                    description="List text files saved in the current Telegram user's private PostgreSQL workspace.",
+                    parameters={"type": "OBJECT", "properties": {}},
+                ),
+                types.FunctionDeclaration(
+                    name="workspace_read",
+                    description="Read one text file from the current Telegram user's private workspace by exact filename.",
+                    parameters={"type": "OBJECT", "properties": {
+                        "filename": {"type": "STRING"},
+                        "start": {"type": "INTEGER", "description": "Character offset, default 0"},
+                        "length": {"type": "INTEGER", "description": "Characters to read, capped at 9000"},
+                    }, "required": ["filename"]},
+                ),
+                types.FunctionDeclaration(
+                    name="workspace_save",
+                    description=(
+                        "Save text or source code as a file in the current user's private PostgreSQL workspace. "
+                        "Text only, up to 50,000 characters; this does not execute code. Existing files are not replaced unless overwrite=true."
+                    ),
+                    parameters={"type": "OBJECT", "properties": {
+                        "filename": {"type": "STRING"},
+                        "content": {"type": "STRING"},
+                        "overwrite": {"type": "BOOLEAN"},
+                    }, "required": ["filename", "content"]},
+                ),
+                types.FunctionDeclaration(
+                    name="session_search",
+                    description="Search the current Telegram user's saved conversation history for earlier discussions. Return matching excerpts only from that user's own history.",
+                    parameters={
+                        "type": "OBJECT",
+                        "properties": {
+                            "query": {"type": "STRING", "description": "Short phrase or keywords to search for"},
+                            "limit": {"type": "INTEGER", "description": "Maximum results, from 1 to 10"}
+                        },
+                        "required": ["query"],
+                    },
+                ),
+                types.FunctionDeclaration(
+                    name="parallel_analysis",
+                    description=(
+                        "Split a complex read-only question into two or three independent analysis tasks and run them concurrently. "
+                        "Each task uses the same configured Gemini model without tools, has bounded output, and consumes the same free model quota. "
+                        "This is parallel analysis, not an isolated subagent or sandbox. Use at most once per user request."
+                    ),
+                    parameters={
+                        "type": "OBJECT",
+                        "properties": {
+                            "tasks": {"type": "ARRAY", "items": {"type": "STRING"}, "minItems": 2, "maxItems": 3},
+                        },
+                        "required": ["tasks"],
+                    },
+                ),
+                types.FunctionDeclaration(
+                    name="web_research",
+                    description=(
+                        "Research a question from several independent angles using the existing no-key public search. "
+                        "Provide 2 to 4 distinct queries. Runs searches concurrently, deduplicates URLs, and returns "
+                        "source titles, URLs, snippets, and retrieved page text. It does not guarantee exhaustive coverage."
+                    ),
+                    parameters={
+                        "type": "OBJECT",
+                        "properties": {
+                            "queries": {"type": "ARRAY", "items": {"type": "STRING"}, "minItems": 2, "maxItems": 4},
+                        },
+                        "required": ["queries"],
+                    },
+                ),
+                types.FunctionDeclaration(
                     name="web_open",
                     description=(
                         "Open a specific public HTTP or HTTPS webpage and read its text and links. "
@@ -755,16 +831,120 @@ def build_agent_tools(user_id=None):
                         "required": ["start_url"],
                     },
                 ),
+                types.FunctionDeclaration(
+                    name="workflow_run_readonly",
+                    description=(
+                        "Run a short sequential automation made only from allowlisted read-only actions. "
+                        "Available actions: web_search, web_open, web_crawl, workspace_list, workspace_read, session_search. "
+                        "Each step may retry up to 2 times. Stops on failure. Maximum 8 steps. "
+                        "No shell, arbitrary code, external mutations, or paid services are available in this workflow."
+                    ),
+                    parameters={
+                        "type": "OBJECT",
+                        "properties": {
+                            "steps": {
+                                "type": "ARRAY",
+                                "minItems": 1,
+                                "maxItems": 8,
+                                "items": {
+                                    "type": "OBJECT",
+                                    "properties": {
+                                        "name": {"type": "STRING"},
+                                        "action": {"type": "STRING", "enum": ["web_search", "web_open", "web_crawl", "workspace_list", "workspace_read", "session_search"]},
+                                        "params": {"type": "OBJECT"},
+                                        "retries": {"type": "INTEGER"},
+                                    },
+                                    "required": ["action"],
+                                },
+                            },
+                        },
+                        "required": ["steps"],
+                    },
+                ),
             ]
         )
     ]
     if is_platform_user(user_id):
         toolset.append(types.Tool(function_declarations=platform_tool_declarations(types)))
+        toolset.append(types.Tool(function_declarations=[
+            types.FunctionDeclaration(
+                name="skills_list",
+                description="List the user's built-in and custom reusable skills.",
+                parameters={"type": "OBJECT", "properties": {}},
+            ),
+            types.FunctionDeclaration(
+                name="skill_view",
+                description="Read a skill's full instructions before applying it.",
+                parameters={"type": "OBJECT", "properties": {
+                    "name": {"type": "STRING", "description": "Skill name"}
+                }, "required": ["name"]},
+            ),
+            types.FunctionDeclaration(
+                name="skill_propose",
+                description="Propose a new or updated reusable skill. This only stages a proposal; never claim it is active until the user approves it.",
+                parameters={"type": "OBJECT", "properties": {
+                    "action": {"type": "STRING", "enum": ["create", "update"]},
+                    "name": {"type": "STRING"},
+                    "instructions": {"type": "STRING"}
+                }, "required": ["action", "name", "instructions"]},
+            ),
+        ]))
     return toolset
 
 
 def execute_agent_tool(name, args, user_id=None):
-    """Execute web tools or an authorized platform tool."""
+    """Execute web, skill-library, or an authorized platform tool."""
+    if name == "workflow_run_readonly":
+        allowed = {"web_search", "web_open", "web_crawl", "workspace_list", "workspace_read", "session_search"}
+        try:
+            steps = validate_workflow(args.get("steps"), allowed)
+            if len(steps) > 8:
+                return {"error": "A workflow may contain at most 8 steps."}
+            for step in steps:
+                if step.retries > 2:
+                    return {"error": "Each workflow step may retry at most twice."}
+                if step.requires_approval:
+                    return {"error": "Approval-gated mutations are not available inside read-only workflows."}
+            handlers = {
+                action: (lambda params, action=action: execute_agent_tool(action, params, user_id=user_id))
+                for action in allowed
+            }
+            return run_workflow(steps, handlers)
+        except (ValueError, TypeError) as error:
+            return {"error": "Invalid workflow: " + str(error)}
+    if name in {"skills_list", "skill_view", "skill_propose"}:
+        if not is_platform_user(user_id):
+            return {"error": "Skill-management tools are available only to the configured owner."}
+        try:
+            if name == "skills_list":
+                return {"skills": list_skills(DATABASE_URL)}
+            if name == "skill_view":
+                skill = get_skill(DATABASE_URL, str(args.get("name", "")))
+                return skill or {"error": "No skill found with that name."}
+            ident = propose_skill(
+                DATABASE_URL, user_id, str(args.get("action", "")),
+                str(args.get("name", "")), str(args.get("instructions", "")),
+            )
+            return {"proposal_id": ident, "status": "pending_approval", "instruction": "The skill is not active until the owner approves it with /skill-approve ID."}
+        except Exception as error:
+            return {"error": str(error)}
+    if name in {"workspace_list", "workspace_read", "workspace_save"}:
+        if user_id is None:
+            return {"error": "A Telegram user identity is required for private workspace access."}
+        try:
+            if name == "workspace_list":
+                return {"files": list_files(DATABASE_URL, user_id)}
+            if name == "workspace_read":
+                result = read_file(DATABASE_URL, user_id, str(args.get("filename", "")), int(args.get("start", 0)), int(args.get("length", 9000)))
+                return result or {"error": "No file with that name exists in your private workspace."}
+            return save_file(
+                DATABASE_URL, user_id, str(args.get("filename", "")),
+                str(args.get("content", "")), bool(args.get("overwrite", False)),
+            )
+        except ValueError as error:
+            return {"error": str(error)}
+        except Exception as error:
+            return {"error": "Workspace operation failed: " + type(error).__name__}
     platform_names = {
         "github_search_repositories", "github_get_file", "github_create_issue",
         "render_list_services", "render_list_deploys", "render_trigger_deploy",
@@ -783,6 +963,66 @@ def execute_agent_tool(name, args, user_id=None):
         return execute_platform_tool(name, args, allow_mutation=False)
 
     """Execute one agent-selected tool and return JSON-safe data."""
+    if name == "session_search":
+        query = " ".join(str(args.get("query", "")).split())[:200]
+        if not query:
+            return {"error": "A search phrase is required."}
+        limit = max(1, min(int(args.get("limit", 5)), 10))
+        try:
+            with psycopg.connect(DATABASE_URL) as conn, conn.cursor() as cur:
+                cur.execute(
+                    """SELECT role, content, created_at FROM conversations
+                       WHERE user_id=%s AND content ILIKE %s
+                       ORDER BY created_at DESC LIMIT %s""",
+                    (str(user_id), "%" + query + "%", limit),
+                )
+                rows = cur.fetchall()
+            return {"query": query, "matches": [
+                {"role": role, "excerpt": str(content)[:900], "created_at": created.isoformat()}
+                for role, content, created in rows
+            ], "count": len(rows)}
+        except Exception as error:
+            return {"error": "Conversation search unavailable: " + type(error).__name__}
+    if name == "parallel_analysis":
+        tasks = args.get("tasks")
+        def analyse(task):
+            response = gemini_client.models.generate_content(
+                model=GEMINI_MODEL,
+                contents=(
+                    "Perform only this bounded, read-only analysis subtask. "
+                    "Do not claim to use tools or access external information. "
+                    "Be concise and state uncertainty.\\n\\nTask: " + str(task)[:500]
+                ),
+                config=types.GenerateContentConfig(temperature=0.2),
+            )
+            return response.text or ""
+        return run_parallel_analysis(tasks, analyse, max_workers=3, max_chars=2200)
+    if name == "web_research":
+        queries = args.get("queries") or []
+        if not isinstance(queries, list):
+            return {"error": "queries must be a list of 2 to 4 distinct search questions."}
+        queries = list(dict.fromkeys(str(q).strip()[:500] for q in queries if str(q).strip()))
+        if not 2 <= len(queries) <= 4:
+            return {"error": "Provide 2 to 4 distinct search questions."}
+        combined = []
+        seen_urls = set()
+        with ThreadPoolExecutor(max_workers=min(4, len(queries))) as pool:
+            futures = {pool.submit(free_web_search, query, 4): query for query in queries}
+            for future in as_completed(futures):
+                query = futures[future]
+                try:
+                    results = future.result()
+                except Exception as error:
+                    combined.append({"query": query, "error": type(error).__name__, "results": []})
+                    continue
+                unique = []
+                for item in results:
+                    url = item.get("url")
+                    if url and url not in seen_urls:
+                        seen_urls.add(url)
+                        unique.append(item)
+                combined.append({"query": query, "results": unique})
+        return {"queries_run": queries, "unique_source_count": len(seen_urls), "workstreams": combined}
     if name == "web_search":
         query = str(args.get("query", "")).strip()
         if not query:
@@ -920,6 +1160,7 @@ Describe what is actually visible or audible, distinguish observation from infer
 If the user includes a URL, use web_open to inspect it when its contents matter; do not treat a URL as if you have read it.
 You can answer normally when web tools are unnecessary. You may use multiple tool calls when needed, but stop when you have enough evidence.
 """
+    system_instruction += "\n\n" + runtime_guidance()
 
     tools = build_agent_tools(user_id)
     initial_parts = [types.Part.from_text(text=prompt)]
@@ -927,8 +1168,10 @@ You can answer normally when web tools are unnecessary. You may use multiple too
         initial_parts.extend(media_parts)
     contents = [types.Content(role="user", parts=initial_parts)]
 
-    for step in range(6):
-        print("Agent reasoning/tool step:", step + 1, flush=True)
+    budget = AgentBudget(max_steps=6, max_tool_calls=12)
+    parallel_analysis_used = False
+    while budget.begin_step():
+        print("Agent reasoning/tool step:", budget.steps_used, flush=True)
 
         try:
             print("Trying configured Gemini model: " + GEMINI_MODEL, flush=True)
@@ -956,26 +1199,28 @@ You can answer normally when web tools are unnecessary. You may use multiple too
         for function_call in function_calls:
             name = getattr(function_call, "name", "") or ""
             args = getattr(function_call, "args", {}) or {}
-            print(
-                "Agent selected tool: "
-                + name
-                + " args="
-                + repr(args),
-                flush=True,
-            )
+            if not budget.record_tool_call(name):
+                result = {"error": "Tool-call budget exhausted for this run. No further tools were executed."}
+                print("Agent tool-call budget exhausted.", flush=True)
+            else:
+                print("Agent selected tool:", name, flush=True)
+                if name == "parallel_analysis" and parallel_analysis_used:
+                    result = {"error": "Parallel analysis is limited to one call per request to protect the free model quota."}
+                else:
+                    if name == "parallel_analysis":
+                        parallel_analysis_used = True
+                    try:
+                        result = execute_agent_tool(name, dict(args), user_id=user_id)
+                    except Exception as error:
+                        result = {"error": "Tool execution failed: " + type(error).__name__}
+                        print("Agent tool execution failed:", type(error).__name__, flush=True)
 
-            try:
-                result = execute_agent_tool(name, dict(args), user_id=user_id)
-            except Exception as error:
-                result = {
-                    "error": "Tool execution failed: " + repr(error)
-                }
-                print(
-                    "Agent tool execution failed: "
-                    + repr(error),
-                    flush=True,
-                )
+            result = compact_tool_result(result)
 
+            # Do not log tool arguments or raw exception messages: they may contain private data.
+            # The model receives bounded, JSON-safe tool results only.
+
+            # Existing approval handling remains authoritative for external mutations.
             contents.append(
                 types.Content(
                     role="user",
@@ -1081,23 +1326,33 @@ def get_telegram_media_parts(message):
                 mime_type,
                 flush=True,
             )
+            if file_size and file_size > MAX_TELEGRAM_ATTACHMENT_BYTES:
+                notes.append(
+                    "The attached " + label + " exceeds the bot's 15 MB safety limit. "
+                    "Please send a smaller file."
+                )
+                continue
             file_path = file_info.get("file_path")
             if not file_path:
                 raise RuntimeError("Telegram did not return a file path")
             download_url = "https://api.telegram.org/file/bot" + TELEGRAM_TOKEN + "/" + file_path
-            file_response = requests.get(download_url, timeout=45)
-            file_response.raise_for_status()
+            with requests.get(download_url, timeout=45, stream=True) as file_response:
+                file_response.raise_for_status()
+                attachment_bytes = collect_limited_bytes(
+                    file_response.iter_content(chunk_size=65536),
+                    MAX_TELEGRAM_ATTACHMENT_BYTES,
+                )
             media_parts.append(types.Part.from_bytes(
-                data=file_response.content,
+                data=attachment_bytes,
                 mime_type=mime_type,
             ))
             if search_requested and mime_type.startswith("image/") and reverse_image_bytes is None:
-                reverse_image_bytes = file_response.content
+                reverse_image_bytes = attachment_bytes
             print(
                 "Downloaded Telegram attachment for multimodal analysis:",
                 label,
                 "bytes:",
-                len(file_response.content),
+                len(attachment_bytes),
                 "Gemini media parts:",
                 len(media_parts),
                 flush=True,
@@ -1153,17 +1408,158 @@ def process_message(update_data):
         print("Received message. Text present:", bool(text), "media parts:", len(media_parts), flush=True)
 
         command = text.strip().split()
-        personal_commands = {"/remember", "/memories", "/forget", "/task", "/tasks", "/done", "/remind", "/schedule", "/schedules", "/unschedule"}
+        personal_commands = {"/remember", "/memories", "/forget", "/task", "/tasks", "/done", "/remind", "/schedule", "/schedules", "/unschedule", "/pause-schedule", "/resume-schedule", "/edit-schedule", "/skills", "/skill", "/skill-create", "/skill-update", "/skill-pending", "/skill-approve", "/skill-reject", "/skill-delete", "/files", "/file", "/file-delete"}
+        skill_commands = {"/skills", "/skill", "/skill-create", "/skill-update", "/skill-pending", "/skill-approve", "/skill-reject", "/skill-delete"}
         if command and command[0].split("@")[0] in personal_commands and chat.get("type") != "private":
             send_telegram_message(chat_id, "For privacy, use personal memory, task, and reminder commands in a private chat with the bot.")
             return
+        if command and command[0].split("@")[0] in skill_commands and not is_platform_user(user_id):
+            send_telegram_message(chat_id, "Custom skill management is restricted to the configured bot owner.")
+            return
         if chat.get("type") == "private":
             try:
-                for reminder_chat, reminder_message, reminder_id in due_reminders(DATABASE_URL):
-                    send_telegram_message(reminder_chat, "Reminder: " + reminder_message)
+                for reminder_chat, reminder_message, reminder_id, attempts in due_reminders(DATABASE_URL):
+                    try:
+                        delivered = send_telegram_message(reminder_chat, "Reminder: " + reminder_message)
+                        if delivered:
+                            mark_reminder_sent(DATABASE_URL, reminder_id)
+                        else:
+                            fail_reminder(DATABASE_URL, reminder_id, "Telegram send failed")
+                    except Exception as delivery_error:
+                        fail_reminder(DATABASE_URL, reminder_id, type(delivery_error).__name__)
             except Exception as reminder_error:
                 print("REMINDER CHECK ERROR:", repr(reminder_error), flush=True)
 
+        if command and command[0].split("@")[0] == "/status":
+            if chat.get("type") != "private":
+                send_telegram_message(chat_id, "For privacy, use /status in a private chat with the bot.")
+                return
+            database_status = "not configured"
+            if DATABASE_URL:
+                try:
+                    with psycopg.connect(DATABASE_URL, connect_timeout=3) as connection:
+                        with connection.cursor() as cursor:
+                            cursor.execute("SELECT 1")
+                            cursor.fetchone()
+                    database_status = "connected"
+                except Exception as status_error:
+                    database_status = "unavailable (" + type(status_error).__name__ + ")"
+            send_telegram_message(
+                chat_id,
+                "Bot runtime status\\n"
+                + "Telegram token: " + ("configured" if TELEGRAM_TOKEN else "missing") + "\\n"
+                + "Gemini API key: " + ("configured" if GEMINI_API_KEY else "missing") + "\\n"
+                + "Configured model: " + GEMINI_MODEL + "\\n"
+                + "PostgreSQL: " + database_status + "\\n"
+                + "Paid fallback: disabled\\n"
+                + "Live Render deployment: not verified by this command."
+            )
+            return
+
+        if command and command[0].split("@")[0] in {"/help", "/capabilities"}:
+            send_telegram_message(
+                chat_id,
+                "Current capabilities:\n"
+                "- Web search, opening pages, same-site crawling, multi-angle parallel research, bounded parallel analysis, and private conversation-history search.\n"
+                "- Image, audio, video, PDF, and supported document input when the configured Gemini model accepts the format.\n"
+                "- Conversation history search, saved memories, tasks, retryable one-shot reminders, and daily/weekly schedules with pause/resume/edit/cancel.\n- Private text workspace: list, read, save, and delete your own text files; saved code is never executed.\n"
+                "- Built-in coaching skills plus owner-managed reusable skills with approval before activation.\n"
+                "- Owner-gated GitHub, Render, Todoist, and Google Calendar tools when credentials are configured.\n"
+                "- Explicit approval for supported external changes.\n\n"
+                "Current limitations: no guaranteed Hermes feature parity; no unrestricted terminal or file-system execution, general browser interaction, true isolated subagents, MCP/plugin registry, or full multi-platform gateway. Parallel analysis is not isolated execution. Free AI and hosting quotas can limit availability. Use /skills and /schedules for details."
+            )
+            return
+        if command and command[0].split("@")[0] == "/files":
+            try:
+                rows = list_files(DATABASE_URL, user_id)
+                listing = "\\n".join(f"{item['filename']} ({item['characters']} characters)" for item in rows)
+                send_telegram_message(chat_id, "Your private text workspace:\\n" + listing if rows else "Your private text workspace is empty. Ask me to save text as a named file.")
+            except Exception:
+                send_telegram_message(chat_id, "I could not list your workspace files right now.")
+            return
+        if command and command[0].split("@")[0] == "/file":
+            filename = text.partition(" ")[2].strip()
+            if not filename:
+                send_telegram_message(chat_id, "Use /file FILENAME to read a saved text file.")
+            else:
+                try:
+                    item = read_file(DATABASE_URL, user_id, filename)
+                    send_telegram_message(chat_id, (item["filename"] + "\\n\\n" + item["content"][:3500]) if item else "No file with that name exists in your private workspace.")
+                except ValueError as error:
+                    send_telegram_message(chat_id, str(error))
+                except Exception:
+                    send_telegram_message(chat_id, "I could not read that workspace file right now.")
+            return
+        if command and command[0].split("@")[0] == "/file-delete":
+            filename = text.partition(" ")[2].strip()
+            if not filename:
+                send_telegram_message(chat_id, "Use /file-delete EXACT FILENAME to delete one of your saved text files.")
+            else:
+                try:
+                    removed = delete_file(DATABASE_URL, user_id, filename)
+                    send_telegram_message(chat_id, "Workspace file deleted." if removed else "No file with that name exists in your private workspace.")
+                except ValueError as error:
+                    send_telegram_message(chat_id, str(error))
+                except Exception:
+                    send_telegram_message(chat_id, "I could not delete that workspace file right now.")
+            return
+        if command and command[0].split("@")[0] == "/skills":
+            try:
+                rows = list_skills(DATABASE_URL)
+                send_telegram_message(chat_id, "Reusable skills:\n" + "\n".join("- " + row["name"] + " (" + row["source"] + ")" for row in rows))
+            except Exception:
+                send_telegram_message(chat_id, "I could not list skills right now.")
+            return
+        if command and command[0].split("@")[0] == "/skill":
+            name = text.partition(" ")[2].strip()
+            if not name:
+                send_telegram_message(chat_id, "Use /skill NAME to read a skill. Create or update one with /skill-create NAME | instructions or /skill-update NAME | instructions. Review with /skill-pending, then /skill-approve ID or /skill-reject ID. Delete a custom skill with /skill-delete NAME.")
+            else:
+                try:
+                    skill = get_skill(DATABASE_URL, name)
+                    send_telegram_message(chat_id, (skill["name"] + "\n\n" + skill["instructions"]) if skill else "No skill found with that name.")
+                except Exception:
+                    send_telegram_message(chat_id, "I could not read that skill right now.")
+            return
+        if command and command[0].split("@")[0] in {"/skill-create", "/skill-update"}:
+            action = "create" if command[0].split("@")[0] == "/skill-create" else "update"
+            payload = text.partition(" ")[2]
+            name, sep, instructions = payload.partition("|")
+            if not sep:
+                send_telegram_message(chat_id, "Use /" + command[0].split("@")[0][1:] + " NAME | detailed instructions")
+            else:
+                try:
+                    ident = propose_skill(DATABASE_URL, user_id, action, name.strip(), instructions.strip())
+                    send_telegram_message(chat_id, "Skill proposal #" + str(ident) + " is pending. It is not active until approved with /skill-approve " + str(ident) + ".")
+                except Exception as error:
+                    send_telegram_message(chat_id, "I could not stage that skill: " + str(error))
+            return
+        if command and command[0].split("@")[0] == "/skill-delete":
+            name = text.partition(" ")[2].strip()
+            if not name:
+                send_telegram_message(chat_id, "Use /skill-delete EXACT CUSTOM SKILL NAME. Built-in skills are protected.")
+            else:
+                try:
+                    removed = delete_custom_skill(DATABASE_URL, name)
+                    send_telegram_message(chat_id, "Custom skill deleted." if removed else "No custom skill found with that name.")
+                except ValueError as error:
+                    send_telegram_message(chat_id, str(error))
+                except Exception:
+                    send_telegram_message(chat_id, "I could not delete that custom skill right now.")
+            return
+        if command and command[0].split("@")[0] == "/skill-pending":
+            try:
+                rows = list_pending_skills(DATABASE_URL, user_id)
+                listing = "\n".join("#%s %s %s (%s)" % (ident, action, name, created.strftime("%Y-%m-%d")) for ident, action, name, created in rows)
+                send_telegram_message(chat_id, "Pending skill proposals:\n" + listing if rows else "No pending skill proposals.")
+            except Exception:
+                send_telegram_message(chat_id, "I could not list pending proposals.")
+            return
+        if command and command[0].split("@")[0] in {"/skill-approve", "/skill-reject"}:
+            approve = command[0].split("@")[0] == "/skill-approve"
+            changed = len(command) == 2 and command[1].isdigit() and decide_skill(DATABASE_URL, user_id, int(command[1]), approve)
+            send_telegram_message(chat_id, ("Skill proposal approved and activated." if approve else "Skill proposal rejected.") if changed else "No pending skill proposal with that ID belongs to you.")
+            return
         if command and command[0].split("@")[0] == "/remember":
             try:
                 ident = add_memory(DATABASE_URL, user_id, text.partition(" ")[2].strip())
@@ -1244,13 +1640,42 @@ def process_message(update_data):
                 else:
                     lines = [
                         "#" + str(ident) + " [" + frequency + "] " + local_time + " " + timezone
-                        + "\\nNext run: " + next_run.strftime("%Y-%m-%d %H:%M %Z")
-                        + "\\n" + request_text
-                        for ident, request_text, frequency, local_time, timezone, next_run in rows
+                        + "\nNext run: " + next_run.strftime("%Y-%m-%d %H:%M %Z")
+                        + ("\nStatus: paused" if paused else "")
+                        + "\n" + request_text
+                        for ident, request_text, frequency, local_time, timezone, next_run, paused in rows
                     ]
-                    send_telegram_message(chat_id, "Your recurring tasks:\\n\\n" + "\\n\\n".join(lines) + "\\n\\nCancel one with /unschedule ID.")
+                    send_telegram_message(chat_id, "Your recurring tasks:\n\n" + "\n\n".join(lines) + "\n\nUse /pause-schedule ID, /resume-schedule ID, or /unschedule ID.")
             except Exception as error:
                 send_telegram_message(chat_id, "I could not list your schedules: " + str(error))
+            return
+        if command and command[0].split("@")[0] == "/edit-schedule":
+            if chat.get("type") != "private":
+                send_telegram_message(chat_id, "For privacy, manage recurring tasks in a private chat with the bot.")
+                return
+            payload = text.partition(" ")[2].strip()
+            ident_text, sep, schedule_text = payload.partition("|")
+            if not sep or not ident_text.strip().isdigit():
+                send_telegram_message(chat_id, "Use /edit-schedule ID | Every day at 8am, send me the latest AI headlines")
+                return
+            try:
+                changed = edit_schedule(DATABASE_URL, user_id, int(ident_text.strip()), schedule_text.strip())
+                send_telegram_message(chat_id, "Recurring task updated and resumed." if changed else "No active recurring task with that ID belongs to you.")
+            except ValueError as error:
+                send_telegram_message(chat_id, str(error))
+            except Exception:
+                send_telegram_message(chat_id, "I could not update that recurring task right now.")
+            return
+        if command and command[0].split("@")[0] in {"/pause-schedule", "/resume-schedule"}:
+            if chat.get("type") != "private":
+                send_telegram_message(chat_id, "For privacy, manage recurring tasks in a private chat with the bot.")
+                return
+            pause = command[0].split("@")[0] == "/pause-schedule"
+            changed = len(command) == 2 and command[1].isdigit() and set_schedule_paused(DATABASE_URL, user_id, int(command[1]), pause)
+            if changed:
+                send_telegram_message(chat_id, "Recurring task paused." if pause else "Recurring task resumed.")
+            else:
+                send_telegram_message(chat_id, "No active recurring task with that ID belongs to you. Use /schedules to review tasks.")
             return
         if command and command[0].split("@")[0] == "/unschedule":
             if chat.get("type") != "private":
@@ -1322,7 +1747,7 @@ def process_message(update_data):
         if text.startswith("/start"):
             send_telegram_message(
                 chat_id,
-                "Hello! Send text, photos, voice messages, audio, videos, links, or supported documents. Commands include /remember TEXT, /memories, /forget ID, /task TEXT, /tasks, /done ID, /remind YYYY-MM-DD HH:MM | TEXT, /schedule REQUEST, /schedules, /unschedule ID, and /skill NAME. For example: /schedule Every day at 8am, send me the latest AI headlines.",
+                "Hello! Send text, photos, voice messages, audio, videos, links, or supported documents. Commands include /status, /remember TEXT, /memories, /forget ID, /task TEXT, /tasks, /done ID, /remind YYYY-MM-DD HH:MM | TEXT, /schedule REQUEST, /schedules, /unschedule ID, and /skill NAME. For example: /schedule Every day at 8am, send me the latest AI headlines.",
             )
             return
 
@@ -1335,9 +1760,9 @@ def process_message(update_data):
         conversation_text = ""
         for role, content in recent_messages:
             if role == "user":
-                conversation_text += f"User: {content}\\n"
+                conversation_text += f"User: {content}\n"
             elif role == "assistant":
-                conversation_text += f"Assistant: {content}\\n"
+                conversation_text += f"Assistant: {content}\n"
 
         prompt = (
             "Recent conversation:\n"
@@ -1351,6 +1776,14 @@ def process_message(update_data):
         selected_skill = skill_for(text)
         if selected_skill:
             prompt += "\n\nCoaching skill guidance:\n" + selected_skill
+        try:
+            for item in list_skills(DATABASE_URL):
+                if item["source"] == "custom" and item["name"] in (text or "").lower():
+                    custom = get_skill(DATABASE_URL, item["name"])
+                    if custom:
+                        prompt += "\n\nCustom skill guidance (" + custom["name"] + "):\n" + custom["instructions"]
+        except Exception:
+            pass
         if media_notes:
             prompt += "\nAttachment notes:\n" + "\n".join(media_notes)
 

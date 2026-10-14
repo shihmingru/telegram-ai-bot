@@ -1,0 +1,39 @@
+# Zero-cost agent capability plan
+
+This repository is a Telegram-first personal agent, not a full Hermes Agent clone. Capability availability depends on the configured Gemini model, Telegram's supported media formats, free-tier quotas, and connected service credentials.
+
+## Implemented or present in the repository
+
+| Area | Current status | Notes |
+| --- | --- | --- |
+| Tool-using agent loop | Present | Bounded to six model steps and twelve tool calls per run. |
+| Public web research | Present | Search, open, same-site crawl, bounded concurrent multi-query research, one bounded parallel-analysis call, and user-scoped conversation search; public search endpoints can fail or rate-limit. |
+| Conversation context | Present | Recent messages persisted in PostgreSQL. |
+| Explicit saved memory | Present | User-scoped memory commands and memory context. |
+| Private text workspace | Added in this branch | PostgreSQL-backed user-scoped text files, bounded to 100 files and 50,000 characters per file; no shell or code execution. |
+| Tasks and reminders | Present | PostgreSQL-backed; due one-shot reminders are processed by the scheduled worker (when opted in) and the webhook path, with a lease, delivery confirmation, and up to five attempts. Delivery is at-least-once, not exactly-once. |
+| Recurring jobs | Partial | Daily/weekly recurring jobs with pause/resume/edit/cancel and a GitHub Actions worker exist. The worker is opt-in and requires configured repository secrets; end-to-end delivery still needs live verification. |
+| Multimodal input | Partial | Image/audio/video/PDF and supported documents are forwarded when accepted by the configured model; not all formats are guaranteed. |
+| Built-in coaching skills | Present | French, vegetarian cooking, drawing, Buddhist studies, and 鈴鼓. |
+| Persistent custom skills | Added in this branch | Owner-only; create/update changes are staged and require explicit approval; custom skills can be explicitly deleted. |
+| GitHub / Render / Todoist / Calendar | Partial | Existing owner-gated tools; credentials and service APIs determine availability. Mutations use approval queue. |
+| Bounded runtime policy | Added in this branch | Tool-call limits, bounded tool output, reduced sensitive argument/error logging, and zero-cost instructions. |\n| Declarative workflow engine | Added in this branch | Validates up to 20 allowlisted steps, bounded retries, fail-fast behavior, and approval gates. The agent exposes an 8-step read-only workflow tool for web research and private workspace/history reads; no shell, arbitrary code, or mutations are exposed. |
+
+## Not equivalent to Hermes yet
+
+- No unrestricted shell/terminal or persistent isolated execution sandbox. The private text workspace stores text/code but never executes it.
+- No general interactive browser automation or desktop/computer control.
+- No true isolated child agents/subagent delegation. A bounded parallel read-only analysis helper exists, but it uses the same model quota and is not an isolated subagent.
+- No MCP server client or extensible third-party plugin catalog. The built-in read-only workflow runner is limited to six allowlisted actions and is not full n8n feature parity.
+- No broad multi-platform messaging gateway beyond the current Telegram entry point.
+- No full skill registry installer/security scanner or autonomous background skill curator.
+- Recurring-task editing is available; one-shot reminders have bounded retries. Delivery is at-least-once, not exactly-once, and end-to-end live delivery still needs verification.
+- No guarantee of unlimited AI use. Gemini and hosting free tiers have quotas and can change.
+
+## Zero-cost policy
+
+No paid fallback model, paid API, subscription, or new billable infrastructure may be added automatically. If a free quota or service is unavailable, the agent should fail clearly rather than switch to a paid option. Do not enable production changes until tests pass and the owner explicitly approves the deployment.
+
+## Validation
+
+The GitHub Actions workflow compiles the runtime modules and runs unit tests. CI success is not proof of a successful Render deployment, working credentials, Telegram delivery, or scheduled-job delivery. Those require separate integration checks.
