@@ -83,7 +83,7 @@ def trigger_scheduled_worker():
     if (
         claims.get("repository") != "shihmingru/telegram-ai-bot"
         or claims.get("ref") != "refs/heads/main"
-        or claims.get("workflow_ref") != ".github/workflows/scheduled-tasks.yml@refs/heads/main"
+        or claims.get("workflow_ref") != "shihmingru/telegram-ai-bot/.github/workflows/scheduled-tasks.yml@refs/heads/main"
         or claims.get("event_name") not in {"schedule", "workflow_dispatch"}
     ):
         return "Forbidden", 403
