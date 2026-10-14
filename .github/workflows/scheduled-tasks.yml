@@ -38,8 +38,6 @@ jobs:
         if: ${{ steps.check-ready.outputs.ready == 'true' }}
         id: oidc
         env:
-          ACTIONS_ID_TOKEN_REQUEST_URL: ${{ env.ACTIONS_ID_TOKEN_REQUEST_URL }}
-          ACTIONS_ID_TOKEN_REQUEST_TOKEN: ${{ env.ACTIONS_ID_TOKEN_REQUEST_TOKEN }}
           RENDER_URL: ${{ vars.RENDER_URL }}
         run: |
           set -euo pipefail
