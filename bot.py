@@ -1381,6 +1381,32 @@ def process_message(update_data):
             except Exception as reminder_error:
                 print("REMINDER CHECK ERROR:", repr(reminder_error), flush=True)
 
+        if command and command[0].split("@")[0] == "/status":
+            if chat.get("type") != "private":
+                send_telegram_message(chat_id, "For privacy, use /status in a private chat with the bot.")
+                return
+            database_status = "not configured"
+            if DATABASE_URL:
+                try:
+                    with psycopg.connect(DATABASE_URL, connect_timeout=3) as connection:
+                        with connection.cursor() as cursor:
+                            cursor.execute("SELECT 1")
+                            cursor.fetchone()
+                    database_status = "connected"
+                except Exception as status_error:
+                    database_status = "unavailable (" + type(status_error).__name__ + ")"
+            send_telegram_message(
+                chat_id,
+                "Bot runtime status\\n"
+                + "Telegram token: " + ("configured" if TELEGRAM_TOKEN else "missing") + "\\n"
+                + "Gemini API key: " + ("configured" if GEMINI_API_KEY else "missing") + "\\n"
+                + "Configured model: " + GEMINI_MODEL + "\\n"
+                + "PostgreSQL: " + database_status + "\\n"
+                + "Paid fallback: disabled\\n"
+                + "Live Render deployment: not verified by this command."
+            )
+            return
+
         if command and command[0].split("@")[0] in {"/help", "/capabilities"}:
             send_telegram_message(
                 chat_id,
@@ -1672,7 +1698,7 @@ def process_message(update_data):
         if text.startswith("/start"):
             send_telegram_message(
                 chat_id,
-                "Hello! Send text, photos, voice messages, audio, videos, links, or supported documents. Commands include /remember TEXT, /memories, /forget ID, /task TEXT, /tasks, /done ID, /remind YYYY-MM-DD HH:MM | TEXT, /schedule REQUEST, /schedules, /unschedule ID, and /skill NAME. For example: /schedule Every day at 8am, send me the latest AI headlines.",
+                "Hello! Send text, photos, voice messages, audio, videos, links, or supported documents. Commands include /status, /remember TEXT, /memories, /forget ID, /task TEXT, /tasks, /done ID, /remind YYYY-MM-DD HH:MM | TEXT, /schedule REQUEST, /schedules, /unschedule ID, and /skill NAME. For example: /schedule Every day at 8am, send me the latest AI headlines.",
             )
             return
 
