@@ -1439,7 +1439,7 @@ def handle_natural_schedule_management(text, user_id, chat_id, chat_type):
                 send_telegram_message(chat_id, "Your recurring tasks:\n\n" + "\n\n".join(lines))
             return True
 
-        id_match = re.search(r"(?:#|schedule\\s+|task\\s+)?(\\d{1,8})\\b", lower)
+        id_match = re.search(r"(?:#|schedule\s+|task\s+)?(\d{1,8})\b", lower)
         selected = None
         if id_match:
             selected = next((row for row in rows if int(row[0]) == int(id_match.group(1))), None)
@@ -1461,7 +1461,7 @@ def handle_natural_schedule_management(text, user_id, chat_id, chat_type):
             ok = set_schedule_paused(DATABASE_URL, user_id, ident, False)
             send_telegram_message(chat_id, f"Resumed recurring task #{ident}." if ok else "That schedule could not be resumed.")
             return True
-        match = re.search(r"\\b(?:to|at)\\s+(?:(2[0-3]|[01]?\\d):([0-5]\\d)|([1-9]|1[0-2])(?::([0-5]\\d))?\\s*(am|pm))\\b", lower, re.I)
+        match = re.search(r"\b(?:to|at)\s+(?:(2[0-3]|[01]?\d):([0-5]\d)|([1-9]|1[0-2])(?::([0-5]\d))?\s*(am|pm))\b", lower, re.I)
         if match:
             if match.group(1) is not None:
                 hour, minute = int(match.group(1)), int(match.group(2))
@@ -1469,7 +1469,7 @@ def handle_natural_schedule_management(text, user_id, chat_id, chat_type):
                 hour, minute = int(match.group(3)), int(match.group(4) or 0)
                 if match.group(5).lower() == "pm" and hour != 12: hour += 12
                 if match.group(5).lower() == "am" and hour == 12: hour = 0
-            tz = re.search(r"\\[([A-Za-z_/-]+)\\]", value)
+            tz = re.search(r"\[([A-Za-z_/-]+)\]", value)
             zone = tz.group(1) if tz else timezone
             spec = f"{frequency} at {hour:02d}:{minute:02d} [{zone}] | {request}"
             ok = edit_schedule(DATABASE_URL, user_id, ident, spec)
