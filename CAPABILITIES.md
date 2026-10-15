@@ -12,7 +12,7 @@ This repository is a Telegram-first personal agent, not a full Hermes Agent clon
 | Explicit saved memory | Present | User-scoped memory commands and memory context. |
 | Private text workspace | Added in this branch | PostgreSQL-backed user-scoped text files, bounded to 100 files and 50,000 characters per file; no shell or code execution. |
 | Tasks and reminders | Present | PostgreSQL-backed; due one-shot reminders are processed by the scheduled worker (when opted in) and the webhook path, with a lease, delivery confirmation, and up to five attempts. Delivery is at-least-once, not exactly-once. |
-| Recurring jobs | Partial | Daily/weekly recurring jobs with pause/resume/edit/cancel and a GitHub Actions worker exist. The worker is opt-in and requires configured repository secrets; end-to-end delivery still needs live verification. |
+| Recurring jobs | Partial | Daily/weekly jobs can be listed, edited by time, paused, resumed, or cancelled through commands and basic natural-language requests. Automatic delivery still depends on GitHub Actions activation/configuration and live verification. |
 | Multimodal input | Partial | Image/audio/video/PDF and supported documents are forwarded when accepted by the configured model; not all formats are guaranteed. |
 | Built-in coaching skills | Present | French, vegetarian cooking, drawing, Buddhist studies, and 鈴鼓. |
 | Persistent custom skills | Added in this branch | Owner-only; create/update changes are staged and require explicit approval; custom skills can be explicitly deleted. |

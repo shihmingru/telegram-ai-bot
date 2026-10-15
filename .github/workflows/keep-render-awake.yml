@@ -6,11 +6,27 @@ on:
     - cron: "*/5 * * * *"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   ping-render:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - name: Ping Render service
+      - name: Wake and check Render
+        shell: bash
         run: |
-          curl --fail --silent --show-error --max-time 30             https://telegram-ai-bot-57fa.onrender.com/ > /dev/null
-          echo "Render bot pinged successfully."
+          for attempt in 1 2 3; do
+            echo "Render health check $attempt/3"
+            code=$(curl --silent --show-error --output /tmp/health.txt --write-out "%{http_code}" --max-time 70 https://telegram-ai-bot-57fa.onrender.com/) || code="000"
+            if [ "$code" = "200" ]; then
+              echo "Render service responded successfully."
+              exit 0
+            fi
+            echo "Health check returned HTTP $code."
+            cat /tmp/health.txt 2>/dev/null || true
+            sleep 5
+          done
+          echo "::warning::Render did not respond after three attempts; free-tier cold starts or limits may delay availability."
+          exit 0

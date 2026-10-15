@@ -1410,6 +1410,79 @@ def get_telegram_media_parts(message):
     return media_parts, notes, reverse_image_bytes
 
 
+def handle_natural_schedule_management(text, user_id, chat_id, chat_type):
+    """Apply straightforward schedule list/edit/pause/resume/cancel requests in private chat."""
+    value = (text or "").strip()
+    lower = value.lower()
+    if not value or value.startswith("/") or not any(x in lower for x in (
+        "schedule", "scheduled task", "recurring task", "daily news", "news briefing",
+        "daily summary", "every day", "every morning", "every evening"
+    )):
+        return False
+    actions = ("list", "show", "change", "edit", "update", "move", "reschedule",
+               "pause", "stop", "resume", "restart", "cancel", "delete", "remove")
+    if not any(x in lower for x in actions):
+        return False
+    if chat_type != "private":
+        send_telegram_message(chat_id, "For privacy, manage recurring tasks in a private chat with the bot.")
+        return True
+    try:
+        rows = list_schedules(DATABASE_URL, user_id)
+        if any(x in lower for x in ("list", "show", "what schedules", "which schedules")):
+            if not rows:
+                send_telegram_message(chat_id, "You have no active recurring tasks. Tell me what to do and when, for example: Every day at 8am, send me the latest AI headlines.")
+            else:
+                lines = []
+                for ident, request, frequency, local_time, timezone, next_run, paused in rows:
+                    state = "paused" if paused else "active"
+                    lines.append(f"#{ident} {frequency}, {local_time} {timezone} ({state})\nNext run: {next_run}\n{request}")
+                send_telegram_message(chat_id, "Your recurring tasks:\n\n" + "\n\n".join(lines))
+            return True
+
+        id_match = re.search(r"(?:#|schedule\\s+|task\\s+)?(\\d{1,8})\\b", lower)
+        selected = None
+        if id_match:
+            selected = next((row for row in rows if int(row[0]) == int(id_match.group(1))), None)
+        elif len(rows) == 1:
+            selected = rows[0]
+        if selected is None:
+            send_telegram_message(chat_id, "I couldn't identify one schedule safely. Send its number from /schedules, for example: Change schedule #2 to 07:30.")
+            return True
+        ident, request, frequency, local_time, timezone, next_run, paused = selected
+        if any(x in lower for x in ("cancel", "delete", "remove")):
+            ok = cancel_schedule(DATABASE_URL, user_id, ident)
+            send_telegram_message(chat_id, f"Cancelled recurring task #{ident}." if ok else "That schedule could not be cancelled.")
+            return True
+        if any(x in lower for x in ("pause", "stop")):
+            ok = set_schedule_paused(DATABASE_URL, user_id, ident, True)
+            send_telegram_message(chat_id, f"Paused recurring task #{ident}." if ok else "That schedule could not be paused.")
+            return True
+        if any(x in lower for x in ("resume", "restart")):
+            ok = set_schedule_paused(DATABASE_URL, user_id, ident, False)
+            send_telegram_message(chat_id, f"Resumed recurring task #{ident}." if ok else "That schedule could not be resumed.")
+            return True
+        match = re.search(r"\\b(?:to|at)\\s+(?:(2[0-3]|[01]?\\d):([0-5]\\d)|([1-9]|1[0-2])(?::([0-5]\\d))?\\s*(am|pm))\\b", lower, re.I)
+        if match:
+            if match.group(1) is not None:
+                hour, minute = int(match.group(1)), int(match.group(2))
+            else:
+                hour, minute = int(match.group(3)), int(match.group(4) or 0)
+                if match.group(5).lower() == "pm" and hour != 12: hour += 12
+                if match.group(5).lower() == "am" and hour == 12: hour = 0
+            tz = re.search(r"\\[([A-Za-z_/-]+)\\]", value)
+            zone = tz.group(1) if tz else timezone
+            spec = f"{frequency} at {hour:02d}:{minute:02d} [{zone}] | {request}"
+            ok = edit_schedule(DATABASE_URL, user_id, ident, spec)
+            send_telegram_message(chat_id, f"Updated recurring task #{ident} to {hour:02d}:{minute:02d} {zone}." if ok else "That schedule could not be updated.")
+            return True
+        send_telegram_message(chat_id, f"Tell me the new time, for example: Change schedule #{ident} to 07:30.")
+        return True
+    except Exception:
+        send_telegram_message(chat_id, "I couldn't update your schedules right now. No change was confirmed.")
+        return True
+
+
+
 def process_message(update_data):
     try:
         message = update_data.get("message")
@@ -1730,6 +1803,9 @@ def process_message(update_data):
             removed = len(command) == 2 and command[1].isdigit() and cancel_schedule(DATABASE_URL, user_id, command[1])
             send_telegram_message(chat_id, "Recurring task cancelled." if removed else "No active recurring task with that ID belongs to you. Use /schedules to review your tasks.")
             return
+
+        if handle_natural_schedule_management(text, user_id, chat_id, chat.get("type")):
+            return
         # Save clear natural-language recurring requests without requiring source-code edits.
         if (
             text
@@ -1793,7 +1869,7 @@ def process_message(update_data):
         if text.startswith("/start"):
             send_telegram_message(
                 chat_id,
-                "Hello! Send text, photos, voice messages, audio, videos, links, or supported documents. Commands include /status, /remember TEXT, /memories, /forget ID, /task TEXT, /tasks, /done ID, /remind YYYY-MM-DD HH:MM | TEXT, /schedule REQUEST, /schedules, /unschedule ID, and /skill NAME. For example: /schedule Every day at 8am, send me the latest AI headlines.",
+                "Hello! Send text, photos, voice messages, audio, videos, links, or supported documents. You can give normal-language instructions to create or change schedules. Commands: /schedule, /schedules, /edit-schedule ID | REQUEST, /pause-schedule ID, /resume-schedule ID, /unschedule ID, /status, /remember, /memories, /task, /tasks, /remind, and /skill.",
             )
             return
 
