@@ -698,6 +698,22 @@ def send_telegram_message(chat_id, text):
         return False
 
 
+def _typing_indicator(chat_id, stop_event):
+    """Keep Telegram's typing indicator visible during a slow AI response."""
+    while not stop_event.is_set():
+        try:
+            response = requests.post(
+                TELEGRAM_API + "/sendChatAction",
+                json={"chat_id": chat_id, "action": "typing"},
+                timeout=5,
+            )
+            response.raise_for_status()
+        except Exception as error:
+            print("TELEGRAM TYPING INDICATOR ERROR:", type(error).__name__, flush=True)
+        if stop_event.wait(4):
+            break
+
+
 def configure_webhook():
     print("Configuring Telegram webhook...", flush=True)
     try:
@@ -1916,7 +1932,22 @@ def process_message(update_data):
             prompt += "\nAttachment notes:\n" + "\n".join(media_notes)
 
         print("Starting Gemini agent...", flush=True)
-        reply = run_agent(prompt, media_parts=media_parts, user_id=(user_id if chat.get("type") == "private" else None))
+        typing_stop = threading.Event()
+        typing_thread = threading.Thread(
+            target=_typing_indicator,
+            args=(chat_id, typing_stop),
+            daemon=True,
+        )
+        typing_thread.start()
+        try:
+            reply = run_agent(
+                prompt,
+                media_parts=media_parts,
+                user_id=(user_id if chat.get("type") == "private" else None),
+            )
+        finally:
+            typing_stop.set()
+            typing_thread.join(timeout=1)
         print("Gemini agent completed.", flush=True)
 
         reply = clean_telegram_text(reply)
