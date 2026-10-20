@@ -28,20 +28,74 @@ def send(chat_id, text):
 
 
 def retrieve_context(request):
-    """Best-effort free public retrieval for requests needing current information."""
+    """Use free, separate regional Google News RSS queries for current-news tasks."""
     lowered = request.lower()
     keywords = ("news", "latest", "current", "today", "recent", "this week",
                 "price", "deadline", "weather", "update", "search", "research",
                 "look up", "find online", "what happened")
     if not any(k in lowered for k in keywords):
         return ""
+
     headers = {"User-Agent": "TelegramPersonalAgent/1.0 (scheduled public-source retrieval)"}
-    rss = "https://news.google.com/rss/search?q=" + requests.utils.quote(request) + "&hl=en-US&gl=US&ceid=US:en"
+    import xml.etree.ElementTree as ET
+
+    is_regional_briefing = (
+        "daily news" in lowered
+        or ("singapore" in lowered and "france" in lowered and "taiwan" in lowered)
+    )
+    if is_regional_briefing:
+        feeds = [
+            ("Singapore (SG)", "Singapore news when:1d", "en-SG", "SG", "SG:en"),
+            ("France (FR)", "France news when:1d", "en-FR", "FR", "FR:en"),
+            ("Taiwan (TW)", "Taiwan news when:1d", "en-TW", "TW", "TW:en"),
+            ("Global", "world news when:1d", "en-US", "US", "US:en"),
+        ]
+        sections = []
+        for region, query, language, country, edition in feeds:
+            try:
+                response = requests.get(
+                    "https://news.google.com/rss/search",
+                    params={"q": query, "hl": language, "gl": country, "ceid": edition},
+                    headers=headers,
+                    timeout=12,
+                )
+                response.raise_for_status()
+                root = ET.fromstring(response.content)
+                rows = []
+                seen_titles = set()
+                for item in root.findall("./channel/item"):
+                    title = (item.findtext("title") or "").strip()
+                    link = (item.findtext("link") or "").strip()
+                    published = (item.findtext("pubDate") or "").strip()
+                    if not title or not link or title.casefold() in seen_titles:
+                        continue
+                    seen_titles.add(title.casefold())
+                    rows.append(f"- {title}\n  URL: {link}\n  Published: {published}")
+                    if len(rows) >= 3:
+                        break
+                if rows:
+                    sections.append(region + ":\n" + "\n".join(rows))
+                else:
+                    sections.append(region + ": No usable results returned by the live RSS feed.")
+            except Exception as exc:
+                print(f"News RSS retrieval failed for {region} ({type(exc).__name__}).", flush=True)
+                sections.append(region + ": Live retrieval failed.")
+        return (
+            "Live regional news retrieval results. These are search-feed results, not independently "
+            "fact-checked articles. Use only listed headlines and URLs; do not invent regional updates. "
+            "If a region has no results, state that plainly.\n\n" + "\n\n".join(sections)
+        )
+
+    rss = "https://news.google.com/rss/search"
     try:
-        import xml.etree.ElementTree as ET
-        resp = requests.get(rss, headers=headers, timeout=15)
-        resp.raise_for_status()
-        root = ET.fromstring(resp.content)
+        response = requests.get(
+            rss,
+            params={"q": request + " when:1d", "hl": "en-US", "gl": "US", "ceid": "US:en"},
+            headers=headers,
+            timeout=15,
+        )
+        response.raise_for_status()
+        root = ET.fromstring(response.content)
         rows = []
         for item in root.findall("./channel/item")[:8]:
             title = (item.findtext("title") or "").strip()
@@ -50,26 +104,11 @@ def retrieve_context(request):
             if title and link:
                 rows.append(f"- {title}\n  URL: {link}\n  Published: {date}")
         if rows:
-            return "Live results from Google News RSS (verify source articles):\n" + "\n".join(rows)
+            return "Live results from Google News RSS (search-feed results; verify article content):\n" + "\n".join(rows)
     except Exception as exc:
-        print("Free news retrieval failed:", repr(exc), flush=True)
-    try:
-        resp = requests.get(
-            "https://en.wikipedia.org/w/api.php",
-            params={"action": "query", "list": "search", "srsearch": request,
-                    "format": "json", "srlimit": 5},
-            headers=headers, timeout=12,
-        )
-        resp.raise_for_status()
-        items = resp.json().get("query", {}).get("search", [])
-        if items:
-            return "Wikipedia search results (secondary reference, not breaking news):\n" + "\n".join(
-                f"- {x.get('title','')}: https://en.wikipedia.org/wiki/{requests.utils.quote(x.get('title','').replace(' ', '_'))}"
-                for x in items
-            )
-    except Exception as exc:
-        print("Wikipedia retrieval failed:", repr(exc), flush=True)
-    return "No live sources could be retrieved for this run. Be explicit about this and do not present stale knowledge as current."
+        print("Free news retrieval failed (" + type(exc).__name__ + ").", flush=True)
+
+    return "No live news sources could be retrieved for this run. State this clearly and do not substitute stale knowledge or unrelated reference pages for current news."
 
 
 def execute(request):
