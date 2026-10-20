@@ -60,13 +60,18 @@ def _run_scheduled_worker():
 
 
 def _scheduled_worker_loop():
-    """Poll due jobs inside the existing service; no extra service or paid scheduler."""
+    """Poll reminders locally; recurring AI jobs remain explicitly opt-in."""
     import time
     while True:
         if SCHEDULED_WORKER_LOCK.acquire(blocking=False):
             try:
                 import scheduled_worker
-                scheduled_worker.main()
+                if os.environ.get("ENABLE_RECURRING_TASKS", "").strip().lower() == "true":
+                    scheduled_worker.main()
+                else:
+                    # Do not run recurring AI jobs until the owner explicitly
+                    # opts in after confirming the Gemini project billing setup.
+                    scheduled_worker.deliver_due_reminders()
             except Exception as error:
                 print("Scheduled worker loop failed:", type(error).__name__, flush=True)
             finally:
@@ -1779,7 +1784,7 @@ def process_message(update_data):
                     "Saved recurring task #" + str(ident) + " (" + frequency + ", "
                     + clock + " " + timezone + "). First run is scheduled for "
                     + due.strftime("%Y-%m-%d %H:%M %Z")
-                    + ". The existing service checks due tasks periodically; delivery may be delayed if free hosting suspends the service. Use /schedules to review or /unschedule "
+                    + ". Recurring AI delivery remains disabled until ENABLE_RECURRING_TASKS=true is explicitly set after confirming the Gemini project has no billing account linked. The existing service checks due tasks periodically; free hosting may suspend it. Use /schedules to review or /unschedule "
                     + str(ident) + " to cancel."
                 )
             except Exception as error:
@@ -1863,7 +1868,7 @@ def process_message(update_data):
                     + clock + " " + timezone + "). First run: "
                     + due.strftime("%Y-%m-%d %H:%M %Z")
                     + ". Use /schedules to review it or /unschedule " + str(ident) + " to cancel. "
-                    + "The existing service checks due tasks periodically; delivery may be delayed if free hosting suspends it."
+                    + "Recurring AI delivery remains disabled until ENABLE_RECURRING_TASKS=true is explicitly set after confirming the Gemini project has no billing account linked. The existing service checks due tasks periodically; free hosting may suspend it."
                 )
             except Exception as error:
                 send_telegram_message(chat_id, "I recognized a recurring request but could not save it: " + str(error))
