@@ -59,6 +59,21 @@ def _run_scheduled_worker():
         SCHEDULED_WORKER_LOCK.release()
 
 
+def _scheduled_worker_loop():
+    """Poll due jobs inside the existing service; no extra service or paid scheduler."""
+    import time
+    while True:
+        if SCHEDULED_WORKER_LOCK.acquire(blocking=False):
+            try:
+                import scheduled_worker
+                scheduled_worker.main()
+            except Exception as error:
+                print("Scheduled worker loop failed:", type(error).__name__, flush=True)
+            finally:
+                SCHEDULED_WORKER_LOCK.release()
+        time.sleep(60)
+
+
 @app.route("/_internal/run-scheduled-tasks", methods=["POST"])
 def trigger_scheduled_worker():
     # GitHub Actions OIDC authenticates the caller without copying API secrets
@@ -1764,7 +1779,7 @@ def process_message(update_data):
                     "Saved recurring task #" + str(ident) + " (" + frequency + ", "
                     + clock + " " + timezone + "). First run is scheduled for "
                     + due.strftime("%Y-%m-%d %H:%M %Z")
-                    + ". Delivery depends on GitHub Actions being enabled and the repository secrets being configured. Use /schedules to review or /unschedule "
+                    + ". The existing service checks due tasks periodically; delivery may be delayed if free hosting suspends the service. Use /schedules to review or /unschedule "
                     + str(ident) + " to cancel."
                 )
             except Exception as error:
@@ -1848,7 +1863,7 @@ def process_message(update_data):
                     + clock + " " + timezone + "). First run: "
                     + due.strftime("%Y-%m-%d %H:%M %Z")
                     + ". Use /schedules to review it or /unschedule " + str(ident) + " to cancel. "
-                    + "Automatic delivery requires GitHub Actions setup in the repository."
+                    + "The existing service checks due tasks periodically; delivery may be delayed if free hosting suspends it."
                 )
             except Exception as error:
                 send_telegram_message(chat_id, "I recognized a recurring request but could not save it: " + str(error))
@@ -2001,6 +2016,11 @@ server_thread.start()
 import time
 time.sleep(2)
 configure_webhook()
+
+# Run due reminders and recurring tasks in this existing service. This avoids
+# requiring GitHub repository variables or a separate paid worker service.
+scheduler_thread = threading.Thread(target=_scheduled_worker_loop, daemon=True)
+scheduler_thread.start()
 
 # Keep the main process alive while the Flask thread serves requests.
 server_thread.join()
