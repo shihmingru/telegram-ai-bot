@@ -789,7 +789,7 @@ def build_agent_tools(user_id=None):
         "workspace_list", "workspace_read", "session_search",
         "memory_add", "memory_list", "task_add", "task_list",
         "task_complete", "reminder_add", "schedule_add",
-        "schedule_list", "schedule_manage",
+        "schedule_list", "schedule_manage", "workspace_save",
     ]
     if is_platform_user(user_id):
         workflow_actions.extend([
@@ -1150,7 +1150,7 @@ def execute_agent_tool(name, args, user_id=None):
             "workspace_list", "workspace_read", "session_search",
             "memory_add", "memory_list", "task_add", "task_list",
             "task_complete", "reminder_add", "schedule_add",
-            "schedule_list", "schedule_manage",
+            "schedule_list", "schedule_manage", "workspace_save",
         }
         if is_platform_user(user_id):
             allowed.update({
@@ -1162,9 +1162,15 @@ def execute_agent_tool(name, args, user_id=None):
             steps = validate_workflow(args.get("steps"), allowed)
             if len(steps) > 8:
                 return {"error": "A workflow may contain at most 8 steps."}
+            stateful_actions = {
+                "memory_add", "task_add", "task_complete", "reminder_add",
+                "schedule_add", "schedule_manage", "workspace_save",
+            }
             for step in steps:
                 if step.retries > 2:
                     return {"error": "Each workflow step may retry at most twice."}
+                if step.action in stateful_actions and step.retries:
+                    return {"error": "Retries are disabled for state-changing personal actions to prevent duplicate writes. Set retries to 0."}
                 if step.requires_approval:
                     return {"error": "Use the direct action request for external changes; it will create an explicit approval request before changing external state."}
             handlers = {
