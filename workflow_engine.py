@@ -1,18 +1,20 @@
 """Safe, dependency-free workflow primitives for the Telegram agent.
 
-Workflows are declarative JSON-like steps. Arbitrary Python, shell commands,
-URLs, and dynamic imports are deliberately not executable workflow actions.
-External mutations must be routed through the application's approval system.
+Workflows are declarative steps over an explicit action allowlist. Results can be
+passed to later steps with simple {{steps.step_name.result.field}} references.
+Arbitrary Python, shell commands, URLs, and dynamic imports are not executable.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any, Callable
 
 
 MAX_STEPS = 20
 MAX_RETRIES = 3
 MAX_TEXT = 10_000
+_TEMPLATE_RE = re.compile(r"\{\{steps\.([A-Za-z0-9_-]{1,80})\.result((?:\.[A-Za-z0-9_-]+)*)\}\}")
 
 
 @dataclass(frozen=True)
@@ -40,7 +42,7 @@ def validate_workflow(raw: Any, allowed_actions: set[str]) -> list[WorkflowStep]
         params = item.get("params", {})
         retries = item.get("retries", 0)
         approval = item.get("requires_approval", False)
-        if not name or len(name) > 80 or name in names:
+        if not name or len(name) > 80 or not re.fullmatch(r"[A-Za-z0-9_-]+", name) or name in names:
             raise ValueError(f"Step {index} has an invalid or duplicate name.")
         if action not in allowed_actions:
             raise ValueError(f"Step {name}: action is not in the allowlist.")
@@ -54,7 +56,50 @@ def validate_workflow(raw: Any, allowed_actions: set[str]) -> list[WorkflowStep]
             raise ValueError(f"Step {name}: requires_approval must be boolean.")
         names.add(name)
         steps.append(WorkflowStep(name, action, params, retries, approval))
+    # Fail before execution for references to nonexistent or forward steps.
+    prior: set[str] = set()
+    for step in steps:
+        for match in _TEMPLATE_RE.finditer(str(step.params)):
+            if match.group(1) not in prior:
+                raise ValueError(f"Step {step.name}: template refers to a missing or later step '{match.group(1)}'.")
+        prior.add(step.name)
     return steps
+
+
+def _resolve_reference(expression: str, outputs: dict[str, Any]) -> Any:
+    match = _TEMPLATE_RE.fullmatch(expression)
+    if not match:
+        return expression
+    step_name, suffix = match.groups()
+    if step_name not in outputs:
+        raise ValueError(f"Workflow reference '{step_name}' has no result yet.")
+    value = outputs[step_name]
+    for key in (part for part in suffix.split(".") if part):
+        if isinstance(value, dict):
+            if key not in value:
+                raise ValueError(f"Workflow reference field '{key}' is missing from step '{step_name}'.")
+            value = value[key]
+        elif isinstance(value, list) and key.isdigit():
+            index = int(key)
+            if index >= len(value):
+                raise ValueError(f"Workflow reference index is out of range in step '{step_name}'.")
+            value = value[index]
+        else:
+            raise ValueError(f"Workflow reference cannot read field '{key}' from step '{step_name}'.")
+    return value
+
+
+def _resolve_templates(value: Any, outputs: dict[str, Any]) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _resolve_templates(item, outputs) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_resolve_templates(item, outputs) for item in value]
+    if not isinstance(value, str):
+        return value
+    full = _TEMPLATE_RE.fullmatch(value)
+    if full:
+        return _resolve_reference(value, outputs)
+    return _TEMPLATE_RE.sub(lambda m: str(_resolve_reference(m.group(0), outputs)), value)
 
 
 def run_workflow(
@@ -63,8 +108,9 @@ def run_workflow(
     *,
     approve: Callable[[WorkflowStep], bool] | None = None,
 ) -> dict[str, Any]:
-    """Run allowlisted actions sequentially, with bounded retries and fail-fast errors."""
+    """Run allowlisted actions sequentially with bounded retries and data passing."""
     results: list[dict[str, Any]] = []
+    outputs: dict[str, Any] = {}
     for step in steps:
         if step.requires_approval and not (approve and approve(step)):
             return {
@@ -81,10 +127,15 @@ def run_workflow(
                 "failed_step": step.name,
                 "error": "No registered handler for this allowlisted action.",
             }
+        try:
+            params = _resolve_templates(dict(step.params), outputs)
+        except (ValueError, TypeError) as error:
+            return {"status": "failed", "completed": results, "failed_step": step.name, "error": str(error)}
         last_error = "Action failed."
         for attempt in range(step.retries + 1):
             try:
-                value = handler(dict(step.params))
+                value = handler(params)
+                outputs[step.name] = value
                 results.append({"step": step.name, "status": "completed", "result": value})
                 break
             except Exception as error:
