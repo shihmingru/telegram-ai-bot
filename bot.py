@@ -784,6 +784,19 @@ def is_platform_user(user_id):
 
 def build_agent_tools(user_id=None):
     """Tool declarations for Gemini's agent loop."""
+    workflow_actions = [
+        "web_search", "web_open", "web_crawl",
+        "workspace_list", "workspace_read", "session_search",
+        "memory_add", "memory_list", "task_add", "task_list",
+        "task_complete", "reminder_add", "schedule_add",
+        "schedule_list", "schedule_manage",
+    ]
+    if is_platform_user(user_id):
+        workflow_actions.extend([
+            "github_search_repositories", "github_get_file",
+            "render_list_services", "render_list_deploys",
+            "todoist_list_tasks", "google_calendar_list_events",
+        ])
     toolset = [
         types.Tool(
             function_declarations=[
@@ -980,12 +993,13 @@ def build_agent_tools(user_id=None):
                     },
                 ),
                 types.FunctionDeclaration(
-                    name="workflow_run_readonly",
+                    name="workflow_run",
                     description=(
-                        "Run a short sequential automation made only from allowlisted read-only actions. "
-                        "Available actions: web_search, web_open, web_crawl, workspace_list, workspace_read, session_search. "
-                        "Each step may retry up to 2 times. Stops on failure. Maximum 8 steps. "
-                        "No shell, arbitrary code, external mutations, or paid services are available in this workflow."
+                        "Run a bounded n8n-style sequential workflow using the available action allowlist. "
+                        "Supports web research, private memory/tasks/reminders/schedules, private workspace/history, "
+                        "and owner-authorized read-only service integrations. Each step can retry at most twice; "
+                        "the workflow stops on failure or when an external action is awaiting approval. "
+                        "No shell, arbitrary code execution, paid services, or unapproved external mutations."
                     ),
                     parameters={
                         "type": "OBJECT",
@@ -998,7 +1012,7 @@ def build_agent_tools(user_id=None):
                                     "type": "OBJECT",
                                     "properties": {
                                         "name": {"type": "STRING"},
-                                        "action": {"type": "STRING", "enum": ["web_search", "web_open", "web_crawl", "workspace_list", "workspace_read", "session_search"]},
+                                        "action": {"type": "STRING", "enum": workflow_actions},
                                         "params": {"type": "OBJECT"},
                                         "retries": {"type": "INTEGER"},
                                     },
@@ -1130,8 +1144,20 @@ def execute_agent_tool(name, args, user_id=None):
         except Exception as error:
             print("Personal agent tool failed (" + name + "): " + type(error).__name__, flush=True)
             return {"error": "Personal tool failed: " + type(error).__name__}
-    if name == "workflow_run_readonly":
-        allowed = {"web_search", "web_open", "web_crawl", "workspace_list", "workspace_read", "session_search"}
+    if name in {"workflow_run", "workflow_run_readonly"}:
+        allowed = {
+            "web_search", "web_open", "web_crawl",
+            "workspace_list", "workspace_read", "session_search",
+            "memory_add", "memory_list", "task_add", "task_list",
+            "task_complete", "reminder_add", "schedule_add",
+            "schedule_list", "schedule_manage",
+        }
+        if is_platform_user(user_id):
+            allowed.update({
+                "github_search_repositories", "github_get_file",
+                "render_list_services", "render_list_deploys",
+                "todoist_list_tasks", "google_calendar_list_events",
+            })
         try:
             steps = validate_workflow(args.get("steps"), allowed)
             if len(steps) > 8:
@@ -1140,7 +1166,7 @@ def execute_agent_tool(name, args, user_id=None):
                 if step.retries > 2:
                     return {"error": "Each workflow step may retry at most twice."}
                 if step.requires_approval:
-                    return {"error": "Approval-gated mutations are not available inside read-only workflows."}
+                    return {"error": "Use the direct action request for external changes; it will create an explicit approval request before changing external state."}
             handlers = {
                 action: (lambda params, action=action: execute_agent_tool(action, params, user_id=user_id))
                 for action in allowed
@@ -1371,6 +1397,7 @@ You are a calm, kind, compassionate and practical personal AI companion.
 Formatting rule: write clean plain text. Do not use Markdown headings, bold, italics, asterisks, decorative bullets, long dashes, code fences, hexadecimal-looking identifiers, or decorative separators. Use short paragraphs and simple numbered lists only when genuinely useful. Never add formatting noise.
 
 You are an actual tool-using agent. You have live web tools available.
+For multi-step requests, use workflow_run to execute bounded, sequential steps rather than only describing a plan. Use workflow_run only for steps that can be expressed with the declared allowlist; if an external change is needed, request it as a direct action so the existing explicit approval queue is used.
 When the user asks to remember something, use memory_add. When they ask to add/list/complete a to-do, use task_add/task_list/task_complete. When they ask for a one-time reminder, use reminder_add only after the date and time are clear. For recurring tasks, use schedule_add/schedule_list/schedule_manage. Do not merely tell the user to use a slash command when a suitable tool is available. After a tool call, report the actual result, including any delivery limitation returned by the tool.
 Backend and scheduling facts for this specific bot:
 - This bot's webhook service is hosted on the existing Render service; its repository is shihmingru/telegram-ai-bot.
