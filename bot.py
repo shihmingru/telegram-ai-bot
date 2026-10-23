@@ -788,6 +788,72 @@ def build_agent_tools(user_id=None):
         types.Tool(
             function_declarations=[
                 types.FunctionDeclaration(
+                    name="memory_add",
+                    description="Save a personal detail the user explicitly asks you to remember. Private to the current Telegram user.",
+                    parameters={"type": "OBJECT", "properties": {"memory": {"type": "STRING"}}, "required": ["memory"]},
+                ),
+                types.FunctionDeclaration(
+                    name="memory_list",
+                    description="List saved memories belonging to the current Telegram user.",
+                    parameters={"type": "OBJECT", "properties": {}},
+                ),
+                types.FunctionDeclaration(
+                    name="memory_forget",
+                    description="Delete one saved memory by its numeric ID, belonging to the current Telegram user.",
+                    parameters={"type": "OBJECT", "properties": {"memory_id": {"type": "INTEGER"}}, "required": ["memory_id"]},
+                ),
+                types.FunctionDeclaration(
+                    name="task_add",
+                    description="Add a personal to-do task to the current Telegram user's task list.",
+                    parameters={"type": "OBJECT", "properties": {"task": {"type": "STRING"}}, "required": ["task"]},
+                ),
+                types.FunctionDeclaration(
+                    name="task_list",
+                    description="List open to-do tasks belonging to the current Telegram user.",
+                    parameters={"type": "OBJECT", "properties": {}},
+                ),
+                types.FunctionDeclaration(
+                    name="task_complete",
+                    description="Mark one of the current user's open to-do tasks complete by numeric ID.",
+                    parameters={"type": "OBJECT", "properties": {"task_id": {"type": "INTEGER"}}, "required": ["task_id"]},
+                ),
+                types.FunctionDeclaration(
+                    name="reminder_add",
+                    description="Create a one-time Telegram reminder for the current user. Use future local time in Taiwan timezone, format YYYY-MM-DD HH:MM. Ask a brief clarification if the date or time is ambiguous.",
+                    parameters={"type": "OBJECT", "properties": {
+                        "due_at": {"type": "STRING", "description": "Future Taiwan local time, YYYY-MM-DD HH:MM"},
+                        "message": {"type": "STRING", "description": "What to remind the user about"}
+                    }, "required": ["due_at", "message"]},
+                ),
+                types.FunctionDeclaration(
+                    name="schedule_add",
+                    description="Create a recurring personal task. Only use after the user clearly asks for recurring delivery and a time is known. Timezone must be an IANA name such as Asia/Taipei or Europe/Paris. Automatic AI delivery may be disabled by a zero-cost safety gate; report the returned status honestly.",
+                    parameters={"type": "OBJECT", "properties": {
+                        "frequency": {"type": "STRING", "enum": ["daily", "weekly"]},
+                        "local_time": {"type": "STRING", "description": "24-hour HH:MM"},
+                        "timezone": {"type": "STRING", "description": "IANA timezone, e.g. Asia/Taipei"},
+                        "request": {"type": "STRING", "description": "The recurring task to perform"}
+                    }, "required": ["frequency", "local_time", "timezone", "request"]},
+                ),
+                types.FunctionDeclaration(
+                    name="schedule_list",
+                    description="List recurring tasks owned by the current Telegram user and their status.",
+                    parameters={"type": "OBJECT", "properties": {}},
+                ),
+                types.FunctionDeclaration(
+                    name="schedule_manage",
+                    description="Pause, resume, cancel, or edit a recurring task belonging to the current user. For edit, provide a complete schedule_text such as 'daily at 08:00 [Asia/Taipei] | Send me the latest AI news'.",
+                    parameters={"type": "OBJECT", "properties": {
+                        "schedule_id": {"type": "INTEGER"},
+                        "action": {"type": "STRING", "enum": ["pause", "resume", "cancel", "edit"]},
+                        "schedule_text": {"type": "STRING"}
+                    }, "required": ["schedule_id", "action"]},
+                ),
+            ]
+        ),
+        types.Tool(
+            function_declarations=[
+                types.FunctionDeclaration(
                     name="web_search",
                     description=(
                         "Search the public web for current or hard-to-find information. "
@@ -975,7 +1041,95 @@ def build_agent_tools(user_id=None):
 
 
 def execute_agent_tool(name, args, user_id=None):
-    """Execute web, skill-library, or an authorized platform tool."""
+    """Execute web, personal productivity, workspace, or authorized platform tools."""
+    personal_tool_names = {
+        "memory_add", "memory_list", "memory_forget",
+        "task_add", "task_list", "task_complete", "reminder_add",
+        "schedule_add", "schedule_list", "schedule_manage",
+    }
+    if name in personal_tool_names:
+        if user_id is None:
+            return {"error": "Personal tools are available only in a private chat with the bot."}
+        try:
+            if name == "memory_add":
+                ident = add_memory(DATABASE_URL, user_id, str(args.get("memory", "")))
+                return {"ok": True, "memory_id": ident, "message": "Memory saved."}
+            if name == "memory_list":
+                rows = list_memories(DATABASE_URL, user_id)
+                return {"memories": [{"id": ident, "memory": memory} for ident, memory in rows]}
+            if name == "memory_forget":
+                ident = int(args.get("memory_id", 0))
+                return {"ok": forget_memory(DATABASE_URL, user_id, ident), "memory_id": ident}
+            if name == "task_add":
+                ident = add_task(DATABASE_URL, user_id, str(args.get("task", "")))
+                return {"ok": True, "task_id": ident, "message": "Task added."}
+            if name == "task_list":
+                rows = list_tasks(DATABASE_URL, user_id)
+                return {"tasks": [{"id": ident, "task": task} for ident, task in rows]}
+            if name == "task_complete":
+                ident = int(args.get("task_id", 0))
+                return {"ok": complete_task(DATABASE_URL, user_id, ident), "task_id": ident}
+            if name == "reminder_add":
+                due_at = str(args.get("due_at", "")).strip()
+                message = str(args.get("message", "")).strip()
+                ident = add_reminder(DATABASE_URL, user_id, str(user_id), due_at, message)
+                return {
+                    "ok": True, "reminder_id": ident, "due_at": due_at,
+                    "message": message,
+                    "delivery_note": "One-shot reminders are polled by the existing service, but free hosting may suspend the service; delivery is best-effort."
+                }
+            if name == "schedule_add":
+                frequency = str(args.get("frequency", "")).strip().lower()
+                local_time = str(args.get("local_time", "")).strip()
+                timezone = str(args.get("timezone", "Asia/Taipei")).strip()
+                request_text = str(args.get("request", "")).strip()
+                if frequency not in {"daily", "weekly"}:
+                    return {"error": "Frequency must be daily or weekly."}
+                schedule_text = f"{frequency} at {local_time} [{timezone}] | {request_text}"
+                ident, freq, clock, zone, task_request, due = add_schedule(
+                    DATABASE_URL, user_id, str(user_id), schedule_text
+                )
+                enabled = os.environ.get("ENABLE_RECURRING_TASKS", "").strip().lower() == "true"
+                return {
+                    "ok": True, "schedule_id": ident, "frequency": freq,
+                    "local_time": clock, "timezone": zone, "request": task_request,
+                    "first_run": due.isoformat(),
+                    "automatic_delivery_enabled": enabled,
+                    "delivery_note": (
+                        "Recurring AI delivery is enabled by the explicit environment opt-in; actual delivery still needs end-to-end verification."
+                        if enabled else
+                        "The schedule is saved, but recurring AI execution is currently gated off. It will not deliver until ENABLE_RECURRING_TASKS=true is explicitly enabled after confirming the Gemini project has no billing account linked."
+                    )
+                }
+            if name == "schedule_list":
+                rows = list_schedules(DATABASE_URL, user_id)
+                return {"schedules": [
+                    {"id": ident, "request": req, "frequency": freq, "local_time": clock,
+                     "timezone": zone, "next_run": next_run.isoformat(), "paused": paused}
+                    for ident, req, freq, clock, zone, next_run, paused in rows
+                ], "automatic_delivery_enabled": os.environ.get("ENABLE_RECURRING_TASKS", "").strip().lower() == "true"}
+            if name == "schedule_manage":
+                ident = int(args.get("schedule_id", 0))
+                action = str(args.get("action", "")).strip().lower()
+                if action == "pause":
+                    ok = set_schedule_paused(DATABASE_URL, user_id, ident, True)
+                elif action == "resume":
+                    ok = set_schedule_paused(DATABASE_URL, user_id, ident, False)
+                elif action == "cancel":
+                    ok = cancel_schedule(DATABASE_URL, user_id, ident)
+                elif action == "edit":
+                    schedule_text = str(args.get("schedule_text", "")).strip()
+                    if not schedule_text:
+                        return {"error": "For edit, supply a complete schedule_text with frequency, time, timezone, and task request."}
+                    ok = edit_schedule(DATABASE_URL, user_id, ident, schedule_text)
+                else:
+                    return {"error": "Unsupported schedule action."}
+                return {"ok": bool(ok), "schedule_id": ident, "action": action}
+        except ValueError as error:
+            return {"error": str(error)}
+        except Exception as error:
+            print("Personal agent tool failed (" + name + "): " + type(error).__name__, flush=True)
+            return {"error": "Personal tool failed: " + type(error).__name__}
     if name == "workflow_run_readonly":
         allowed = {"web_search", "web_open", "web_crawl", "workspace_list", "workspace_read", "session_search"}
         try:
@@ -1217,6 +1371,7 @@ You are a calm, kind, compassionate and practical personal AI companion.
 Formatting rule: write clean plain text. Do not use Markdown headings, bold, italics, asterisks, decorative bullets, long dashes, code fences, hexadecimal-looking identifiers, or decorative separators. Use short paragraphs and simple numbered lists only when genuinely useful. Never add formatting noise.
 
 You are an actual tool-using agent. You have live web tools available.
+When the user asks to remember something, use memory_add. When they ask to add/list/complete a to-do, use task_add/task_list/task_complete. When they ask for a one-time reminder, use reminder_add only after the date and time are clear. For recurring tasks, use schedule_add/schedule_list/schedule_manage. Do not merely tell the user to use a slash command when a suitable tool is available. After a tool call, report the actual result, including any delivery limitation returned by the tool.
 Backend and scheduling facts for this specific bot:
 - This bot's webhook service is hosted on the existing Render service; its repository is shihmingru/telegram-ai-bot.
 - The deployed code includes an in-service polling loop in bot.py. It checks one-shot reminders every 60 seconds and calls scheduled_worker.main() for recurring AI tasks only when the Render environment variable ENABLE_RECURRING_TASKS is exactly "true". This means GitHub Actions is not the only possible trigger.
