@@ -17,14 +17,14 @@ This repository is a Telegram-first personal agent, not a full Hermes Agent clon
 | Built-in coaching skills | Present | French, vegetarian cooking, drawing, Buddhist studies, and 鈴鼓. |
 | Persistent custom skills | Added in this branch | Owner-only; create/update changes are staged and require explicit approval; custom skills can be explicitly deleted. |
 | GitHub / Render / Todoist / Calendar | Partial | Existing owner-gated tools; credentials and service APIs determine availability. Mutations use approval queue. |
-| Bounded runtime policy | Added in this branch | Tool-call limits, bounded tool output, reduced sensitive argument/error logging, and zero-cost instructions. |\n| Declarative workflow engine | Added in this branch | Validates up to 20 allowlisted steps, bounded retries, fail-fast behavior, and approval gates. The agent exposes an 8-step read-only workflow tool for web research and private workspace/history reads; no shell, arbitrary code, or mutations are exposed. |
+| Bounded runtime policy | Added in this branch | Tool-call limits, bounded tool output, reduced sensitive argument/error logging, and zero-cost instructions. |\n| Declarative workflow engine | Expanded | The agent can run up to 8 sequential allowlisted steps, pass prior results into later steps with safe {{steps.name.result.field}} references, retry read-only steps up to twice, and stop on failures. Includes personal memory/task/reminder/schedule/workspace actions plus owner-gated read-only service integrations. Retries are blocked for state-changing personal actions to avoid duplicate writes. External mutations remain on the explicit approval queue. |
 
 ## Not equivalent to Hermes yet
 
 - No unrestricted shell/terminal or persistent isolated execution sandbox. The private text workspace stores text/code but never executes it.
 - No general interactive browser automation or desktop/computer control.
 - No true isolated child agents/subagent delegation. A bounded parallel read-only analysis helper exists, but it uses the same model quota and is not an isolated subagent.
-- No MCP server client or extensible third-party plugin catalog. The built-in read-only workflow runner is limited to six allowlisted actions and is not full n8n feature parity.
+- No MCP server client or extensible third-party plugin catalog. The bounded workflow runner now supports data passing across allowlisted steps, but it is not full n8n feature parity: no arbitrary node/plugin catalog, event triggers/webhooks beyond the existing app, visual editor, or unrestricted code nodes.
 - No broad multi-platform messaging gateway beyond the current Telegram entry point.
 - No full skill registry installer/security scanner or autonomous background skill curator.
 - Recurring-task editing is available; one-shot reminders have bounded retries. Delivery is at-least-once, not exactly-once, and end-to-end live delivery still needs verification.
