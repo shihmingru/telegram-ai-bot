@@ -54,6 +54,46 @@ class WorkflowEngineTests(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         self.assertEqual(called, [])
 
+    def test_passes_previous_step_output_to_next_step(self):
+        steps = validate_workflow([
+            {"name": "search", "action": "lookup", "params": {"query": "AI"}},
+            {"name": "open", "action": "open", "params": {
+                "url": "{{steps.search.result.items.0.url}}",
+                "label": "Source {{steps.search.result.items.0.title}}",
+            }},
+        ], {"lookup", "open"})
+        seen = []
+        result = run_workflow(steps, {
+            "lookup": lambda _: {"items": [{"url": "https://example.com", "title": "Example"}]},
+            "open": lambda params: seen.append(params) or {"ok": True},
+        })
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(seen, [{
+            "url": "https://example.com",
+            "label": "Source Example",
+        }])
+
+    def test_rejects_forward_workflow_references_before_execution(self):
+        with self.assertRaisesRegex(ValueError, "missing or later"):
+            validate_workflow([
+                {"name": "first", "action": "open", "params": {"url": "{{steps.later.result.url}}"}},
+                {"name": "later", "action": "lookup"},
+            ], {"lookup", "open"})
+
+    def test_missing_result_field_fails_without_running_handler(self):
+        steps = validate_workflow([
+            {"name": "lookup", "action": "lookup", "params": {}},
+            {"name": "open", "action": "open", "params": {"url": "{{steps.lookup.result.missing}}"}},
+        ], {"lookup", "open"})
+        called = []
+        result = run_workflow(steps, {
+            "lookup": lambda _: {"url": "https://example.com"},
+            "open": lambda params: called.append(params),
+        })
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["failed_step"], "open")
+        self.assertEqual(called, [])
+
     def test_rejects_invalid_retry_values(self):
         with self.assertRaisesRegex(ValueError, "retries"):
             validate_workflow([{"action": "lookup", "retries": 999}], {"lookup"})
