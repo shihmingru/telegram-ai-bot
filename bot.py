@@ -67,10 +67,11 @@ def _scheduled_worker_loop():
             try:
                 import scheduled_worker
                 if os.environ.get("ENABLE_RECURRING_TASKS", "").strip().lower() == "true":
+                    # Full AI-generated scheduled tasks require explicit owner opt-in.
                     scheduled_worker.main()
                 else:
-                    # Do not run recurring AI jobs until the owner explicitly
-                    # opts in after confirming the Gemini project billing setup.
+                    # News schedules use free RSS only; no Gemini/model API call is made.
+                    scheduled_worker.deliver_free_news_schedules()
                     scheduled_worker.deliver_due_reminders()
             except Exception as error:
                 print("Scheduled worker loop failed:", type(error).__name__, flush=True)
