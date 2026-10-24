@@ -133,6 +133,45 @@ def execute(request):
     return result
 
 
+def deliver_free_news_schedules():
+    """Deliver due news schedules from free RSS feeds without calling Gemini."""
+    with psycopg.connect(DB) as conn, conn.cursor() as cur:
+        cur.execute("ALTER TABLE agent_schedules ADD COLUMN IF NOT EXISTS paused BOOLEAN NOT NULL DEFAULT FALSE")
+        cur.execute("""
+            SELECT id, chat_id, request, frequency, local_time, timezone
+            FROM agent_schedules
+            WHERE enabled=TRUE AND paused=FALSE
+              AND (next_run <= NOW() OR retry_at <= NOW())
+              AND request ~* '(news|headlines)'
+            ORDER BY next_run
+            LIMIT 20
+            FOR UPDATE SKIP LOCKED
+        """)
+        rows = cur.fetchall()
+        for ident, chat_id, request, frequency, local_time, timezone in rows:
+            zone = ZoneInfo(timezone)
+            now = datetime.now(zone)
+            hour, minute = map(int, local_time.split(":"))
+            next_run = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if next_run <= now:
+                next_run += timedelta(days=1 if frequency == "daily" else 7)
+            cur.execute(
+                "UPDATE agent_schedules SET next_run=%s, retry_at=NULL, last_run=NOW(), failure_count=0, last_error=NULL WHERE id=%s",
+                (next_run, ident),
+            )
+        conn.commit()
+
+    for ident, chat_id, request, frequency, local_time, timezone in rows:
+        try:
+            result = retrieve_context(request)
+            if not result:
+                result = "No live RSS retrieval was available for this scheduled news request."
+            send(chat_id, f"Scheduled task #{ident}\\n\\n{result}")
+            print(f"Free RSS news task {ident} delivered.", flush=True)
+        except Exception as error:
+            print(f"Free RSS news task {ident} failed ({type(error).__name__}).", flush=True)
+
+
 def deliver_due_reminders():
     """Deliver due one-shot reminders independently of incoming Telegram messages."""
     try:
