@@ -28,7 +28,11 @@ def send(chat_id, text):
 
 
 def retrieve_context(request):
-    """Use free, separate regional Google News RSS queries for current-news tasks."""
+    """Retrieve current news from free RSS feeds, with independent source fallbacks."""
+    import email.utils
+    import xml.etree.ElementTree as ET
+    from datetime import timezone as dt_timezone
+
     lowered = request.lower()
     keywords = ("news", "latest", "current", "today", "recent", "this week",
                 "price", "deadline", "weather", "update", "search", "research",
@@ -36,79 +40,103 @@ def retrieve_context(request):
     if not any(k in lowered for k in keywords):
         return ""
 
-    headers = {"User-Agent": "TelegramPersonalAgent/1.0 (scheduled public-source retrieval)"}
-    import xml.etree.ElementTree as ET
-
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; TelegramPersonalAgent/1.1; RSS reader)"}
     is_regional_briefing = (
         "daily news" in lowered
         or ("singapore" in lowered and "france" in lowered and "taiwan" in lowered)
     )
-    if is_regional_briefing:
-        feeds = [
-            ("Singapore (SG)", "Singapore news when:1d", "en-SG", "SG", "SG:en"),
-            ("France (FR)", "France news when:1d", "en-FR", "FR", "FR:en"),
-            ("Taiwan (TW)", "Taiwan news when:1d", "en-TW", "TW", "TW:en"),
-            ("Global", "world news when:1d", "en-US", "US", "US:en"),
-        ]
-        sections = []
-        for region, query, language, country, edition in feeds:
-            try:
-                response = requests.get(
-                    "https://news.google.com/rss/search",
-                    params={"q": query, "hl": language, "gl": country, "ceid": edition},
-                    headers=headers,
-                    timeout=12,
-                )
-                response.raise_for_status()
-                root = ET.fromstring(response.content)
-                rows = []
-                seen_titles = set()
-                for item in root.findall("./channel/item"):
-                    title = (item.findtext("title") or "").strip()
-                    link = (item.findtext("link") or "").strip()
-                    published = (item.findtext("pubDate") or "").strip()
-                    if not title or not link or title.casefold() in seen_titles:
-                        continue
-                    seen_titles.add(title.casefold())
-                    rows.append(f"- {title}\n  URL: {link}\n  Published: {published}")
-                    if len(rows) >= 3:
-                        break
-                if rows:
-                    sections.append(region + ":\n" + "\n".join(rows))
-                else:
-                    sections.append(region + ": No usable results returned by the live RSS feed.")
-            except Exception as exc:
-                print(f"News RSS retrieval failed for {region} ({type(exc).__name__}).", flush=True)
-                sections.append(region + ": Live retrieval failed.")
-        return (
-            "Live regional news retrieval results. These are search-feed results, not independently "
-            "fact-checked articles. Use only listed headlines and URLs; do not invent regional updates. "
-            "If a region has no results, state that plainly.\n\n" + "\n\n".join(sections)
-        )
 
-    rss = "https://news.google.com/rss/search"
-    try:
-        response = requests.get(
-            rss,
-            params={"q": request + " when:1d", "hl": "en-US", "gl": "US", "ceid": "US:en"},
-            headers=headers,
-            timeout=15,
-        )
-        response.raise_for_status()
-        root = ET.fromstring(response.content)
-        rows = []
-        for item in root.findall("./channel/item")[:8]:
+    def parse_feed(content):
+        root = ET.fromstring(content)
+        entries = root.findall("./channel/item")
+        if not entries:
+            entries = [e for e in root.iter() if e.tag.rsplit("}", 1)[-1] == "entry"]
+        output = []
+        cutoff = datetime.now(dt_timezone.utc) - timedelta(hours=48)
+        seen = set()
+        for item in entries:
             title = (item.findtext("title") or "").strip()
             link = (item.findtext("link") or "").strip()
-            date = (item.findtext("pubDate") or "").strip()
-            if title and link:
-                rows.append(f"- {title}\n  URL: {link}\n  Published: {date}")
-        if rows:
-            return "Live results from Google News RSS (search-feed results; verify article content):\n" + "\n".join(rows)
-    except Exception as exc:
-        print("Free news retrieval failed (" + type(exc).__name__ + ").", flush=True)
+            if not link:
+                link_node = next((e for e in item if e.tag.rsplit("}", 1)[-1] == "link"), None)
+                if link_node is not None:
+                    link = (link_node.attrib.get("href") or link_node.text or "").strip()
+            published = (item.findtext("pubDate") or item.findtext("{http://purl.org/dc/elements/1.1/}date")
+                         or item.findtext("{http://www.w3.org/2005/Atom}updated")
+                         or item.findtext("{http://www.w3.org/2005/Atom}published") or "").strip()
+            if not title or not link or title.casefold() in seen:
+                continue
+            # Reject old or undated entries rather than presenting them as current news.
+            try:
+                dt = email.utils.parsedate_to_datetime(published)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=dt_timezone.utc)
+                if dt.astimezone(dt_timezone.utc) < cutoff:
+                    continue
+            except (TypeError, ValueError, OverflowError):
+                continue
+            seen.add(title.casefold())
+            output.append((dt, title, link, published))
+            if len(output) >= 12:
+                break
+        output.sort(key=lambda row: row[0], reverse=True)
+        return output
 
-    return "No live news sources could be retrieved for this run. State this clearly and do not substitute stale knowledge or unrelated reference pages for current news."
+    def collect_region(region, sources, limit=3):
+        failures = []
+        for label, url, params in sources:
+            try:
+                response = requests.get(url, params=params, headers=headers, timeout=10)
+                response.raise_for_status()
+                rows = parse_feed(response.content)
+                if rows:
+                    return region + " (source: " + label + "):\\n" + "\\n".join(
+                        f"- {title}\\n  URL: {link}\\n  Published: {published}"
+                        for _, title, link, published in rows[:limit]
+                    )
+                failures.append(label + ": no recent dated entries")
+            except Exception as exc:
+                failures.append(label + ": " + type(exc).__name__)
+        print("RSS retrieval unavailable for " + region + " (" + "; ".join(failures) + ").", flush=True)
+        return region + ": No live news sources could be retrieved for this run."
+
+    google = "https://news.google.com/rss/search"
+    if is_regional_briefing:
+        feeds = [
+            ("Singapore (SG)", [
+                ("CNA Singapore RSS", "https://www.channelnewsasia.com/api/v1/rss-outbound-feed", {"_format":"xml","category":"10416"}),
+                ("Google News Singapore", google, {"q":"Singapore news when:2d","hl":"en-SG","gl":"SG","ceid":"SG:en"}),
+            ]),
+            ("France (FR)", [
+                ("France 24 France RSS", "https://www.france24.com/en/france/rss", {}),
+                ("Google News France", google, {"q":"France news when:2d","hl":"en-US","gl":"US","ceid":"US:en"}),
+            ]),
+            ("Taiwan (TW)", [
+                ("Google News Taiwan", google, {"q":"Taiwan news when:2d","hl":"en-US","gl":"US","ceid":"US:en"}),
+                ("Taiwan News RSS", "https://www.taiwannews.com.tw/rss", {}),
+                ("BBC Asia RSS", "https://feeds.bbci.co.uk/news/world/asia/rss.xml", {}),
+            ]),
+            ("Global", [
+                ("BBC World RSS", "https://feeds.bbci.co.uk/news/world/rss.xml", {}),
+                ("Deutsche Welle RSS", "https://rss.dw.com/xml/rss-en-all", {}),
+                ("Google News World", google, {"q":"world news when:2d","hl":"en-US","gl":"US","ceid":"US:en"}),
+            ]),
+        ]
+        sections = [collect_region(region, sources) for region, sources in feeds]
+        return (
+            "Live RSS news results. Headlines are sourced from the listed feeds and are not independently fact-checked. "
+            "Only headlines with publication timestamps within the last 48 hours are included. Do not invent updates; "
+            "if retrieval fails for a region, report that explicitly.\\n\\n" + "\\n\\n".join(sections)
+        )
+
+    rows = collect_region("Current news", [
+        ("Google News search", google, {"q":request + " when:2d","hl":"en-US","gl":"US","ceid":"US:en"}),
+        ("BBC World RSS", "https://feeds.bbci.co.uk/news/world/rss.xml", {}),
+        ("Deutsche Welle RSS", "https://rss.dw.com/xml/rss-en-all", {}),
+    ], limit=8)
+    if "No live news sources could be retrieved" in rows:
+        return "No live news sources could be retrieved for this run. State this clearly and do not substitute stale knowledge or unrelated reference pages for current news."
+    return "Live RSS results (use the listed source URLs; not independently fact-checked):\\n" + rows
 
 
 def execute(request):
