@@ -139,26 +139,21 @@ def retrieve_context(request):
     return "Live RSS results (use the listed source URLs; not independently fact-checked):\\n" + rows
 
 
-def execute(request):
-    context = retrieve_context(request)
+def execute(request, user_id=None):
+    """Run the saved instruction through the same bounded tool-using agent as live chats."""
+    # Import lazily to avoid a module-import cycle: bot.py imports this worker inside its poll loop.
+    import bot
     prompt = (
-        "Complete this user's scheduled request as helpfully as possible. This is an automated "
-        "recurring task, so produce the result directly rather than asking the user to return later. "
-        "Use concise plain text. Never claim an action was taken unless it was. If current information "
-        "is needed, rely only on the supplied live retrieval results, cite their URLs, and state clearly "
-        "when retrieval failed. Never invent sources or facts. No paid tools or fallbacks are available.\n\n"
-        f"Scheduled request:\n{request}\n\n"
-        f"Free retrieval context:\n{context or 'No web retrieval was requested by the detector.'}"
+        "Execute this user's scheduled task now using the available agent tools. "
+        "Treat this as the scheduled occurrence, not as a request to explain how to do it. "
+        "Use the tools required to complete the task when they are available. "
+        "For current information, retrieve live sources and include their URLs; if retrieval fails, "
+        "say so clearly and do not substitute stale knowledge. Do not claim an action succeeded unless "
+        "the tool confirms it. Do not bypass approvals for external changes. If the task cannot be completed "
+        "with available tools or permissions, state the exact limitation briefly.\n\n"
+        "Scheduled task:\n" + request
     )
-    response = client.models.generate_content(
-        model=MODEL,
-        contents=prompt,
-        config=types.GenerateContentConfig(temperature=0.2),
-    )
-    result = (response.text or "").strip()
-    if not result:
-        raise RuntimeError("Configured Gemini model returned an empty response")
-    return result
+    return bot.run_agent(prompt, user_id=user_id)
 
 
 def deliver_free_news_schedules():
@@ -264,7 +259,7 @@ def main():
     for row in rows:
         ident, user_id, chat_id, request, frequency, local_time, timezone, current_next_run, retry_at, failure_count, normal_due = row
         try:
-            result = execute(request)
+            result = execute(request, user_id=user_id)
             send(chat_id, f"Scheduled task #{ident}\\n\\n{result}")
             with psycopg.connect(DB) as conn, conn.cursor() as cur:
                 cur.execute(
