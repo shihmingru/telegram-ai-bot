@@ -167,7 +167,7 @@ def deliver_free_news_schedules():
               AND (next_run <= NOW() OR retry_at <= NOW())
               AND request ~* '(news|headlines)'
             ORDER BY next_run
-            LIMIT 20
+            LIMIT 1
             FOR UPDATE SKIP LOCKED
         """)
         rows = cur.fetchall()
