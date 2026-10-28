@@ -49,6 +49,48 @@ app = Flask(__name__)
 SCHEDULED_WORKER_LOCK = threading.Lock()
 
 
+def recurring_tasks_enabled():
+    """Read the persistent owner-controlled scheduler switch; environment opt-in remains a legacy fallback."""
+    try:
+        with psycopg.connect(DATABASE_URL, connect_timeout=3) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS agent_runtime_settings (
+                        setting_key TEXT PRIMARY KEY,
+                        setting_value TEXT NOT NULL,
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                """)
+                cursor.execute("SELECT setting_value FROM agent_runtime_settings WHERE setting_key = 'recurring_ai_tasks_enabled'")
+                row = cursor.fetchone()
+            connection.commit()
+        if row:
+            return row[0].strip().lower() == "true"
+    except Exception as error:
+        print("Scheduler setting read failed; failing closed:", type(error).__name__, flush=True)
+        return False
+    return os.environ.get("ENABLE_RECURRING_TASKS", "").strip().lower() == "true"
+
+
+def set_recurring_tasks_enabled(enabled):
+    with psycopg.connect(DATABASE_URL, connect_timeout=3) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS agent_runtime_settings (
+                    setting_key TEXT PRIMARY KEY,
+                    setting_value TEXT NOT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """)
+            cursor.execute("""
+                INSERT INTO agent_runtime_settings(setting_key, setting_value, updated_at)
+                VALUES ('recurring_ai_tasks_enabled', %s, NOW())
+                ON CONFLICT (setting_key) DO UPDATE
+                SET setting_value = EXCLUDED.setting_value, updated_at = NOW()
+            """, ("true" if enabled else "false",))
+        connection.commit()
+
+
 def _run_scheduled_worker():
     try:
         import scheduled_worker
@@ -66,8 +108,8 @@ def _scheduled_worker_loop():
         if SCHEDULED_WORKER_LOCK.acquire(blocking=False):
             try:
                 import scheduled_worker
-                if os.environ.get("ENABLE_RECURRING_TASKS", "").strip().lower() == "true":
-                    # Full AI-generated scheduled tasks require explicit owner opt-in.
+                if recurring_tasks_enabled():
+                    # Full AI-generated scheduled tasks require explicit owner opt-in stored in PostgreSQL.
                     scheduled_worker.main()
                 else:
                     # News schedules use free RSS only; no Gemini/model API call is made.
@@ -108,6 +150,8 @@ def trigger_scheduled_worker():
         or claims.get("event_name") not in {"schedule", "workflow_dispatch"}
     ):
         return "Forbidden", 403
+    if not recurring_tasks_enabled():
+        return "Recurring AI tasks are disabled by the owner's scheduler setting", 204
     if not SCHEDULED_WORKER_LOCK.acquire(blocking=False):
         return "Scheduled worker already running", 409
     threading.Thread(target=_run_scheduled_worker, daemon=True).start()
@@ -1761,7 +1805,7 @@ def process_message(update_data):
         print("Received message. Text present:", bool(text), "media parts:", len(media_parts), flush=True)
 
         command = text.strip().split()
-        personal_commands = {"/remember", "/memories", "/forget", "/task", "/tasks", "/done", "/remind", "/schedule", "/schedules", "/unschedule", "/pause-schedule", "/resume-schedule", "/edit-schedule", "/skills", "/skill", "/skill-create", "/skill-update", "/skill-pending", "/skill-approve", "/skill-reject", "/skill-delete", "/files", "/file", "/file-delete"}
+        personal_commands = {"/remember", "/memories", "/forget", "/task", "/tasks", "/done", "/remind", "/schedule", "/schedules", "/unschedule", "/pause-schedule", "/resume-schedule", "/edit-schedule", "/scheduler", "/skills", "/skill", "/skill-create", "/skill-update", "/skill-pending", "/skill-approve", "/skill-reject", "/skill-delete", "/files", "/file", "/file-delete"}
         skill_commands = {"/skills", "/skill", "/skill-create", "/skill-update", "/skill-pending", "/skill-approve", "/skill-reject", "/skill-delete"}
         if command and command[0].split("@")[0] in personal_commands and chat.get("type") != "private":
             send_telegram_message(chat_id, "For privacy, use personal memory, task, and reminder commands in a private chat with the bot.")
@@ -1782,6 +1826,35 @@ def process_message(update_data):
                         fail_reminder(DATABASE_URL, reminder_id, type(delivery_error).__name__)
             except Exception as reminder_error:
                 print("REMINDER CHECK ERROR:", repr(reminder_error), flush=True)
+
+        if command and command[0].split("@")[0] == "/scheduler":
+            if chat.get("type") != "private":
+                send_telegram_message(chat_id, "For safety, use /scheduler only in a private chat with the bot.")
+                return
+            if not is_platform_user(user_id):
+                send_telegram_message(chat_id, "Only the configured bot owner can enable or disable recurring AI execution.")
+                return
+            action = command[1].lower() if len(command) > 1 else "status"
+            if action not in {"on", "off", "status"}:
+                send_telegram_message(chat_id, "Use /scheduler status, /scheduler on, or /scheduler off.")
+                return
+            try:
+                if action in {"on", "off"}:
+                    set_recurring_tasks_enabled(action == "on")
+                enabled = recurring_tasks_enabled()
+                state = "ON" if enabled else "OFF"
+                if action == "on":
+                    send_telegram_message(
+                        chat_id,
+                        "Recurring AI execution is now ON. The worker will run saved daily/weekly instructions when due, subject to service availability and the configured Gemini quota. No paid fallback is configured. I cannot guarantee zero charges unless your Google project is restricted to free usage. Use /scheduler off to stop AI scheduled runs."
+                    )
+                elif action == "off":
+                    send_telegram_message(chat_id, "Recurring AI execution is now OFF. One-shot reminders and the free RSS news path remain separate.")
+                else:
+                    send_telegram_message(chat_id, "Recurring AI execution: " + state + ". Use /scheduler on or /scheduler off to change it.")
+            except Exception as scheduler_error:
+                send_telegram_message(chat_id, "I could not update the scheduler setting (" + type(scheduler_error).__name__ + "). No change is confirmed.")
+            return
 
         if command and command[0].split("@")[0] == "/status":
             if chat.get("type") != "private":
