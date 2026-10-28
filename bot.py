@@ -151,7 +151,7 @@ def trigger_scheduled_worker():
     ):
         return "Forbidden", 403
     if not recurring_tasks_enabled():
-        return "Recurring AI tasks are disabled by the owner's scheduler setting", 204
+        return "Recurring AI tasks are disabled by the owner's scheduler setting", 409
     if not SCHEDULED_WORKER_LOCK.acquire(blocking=False):
         return "Scheduled worker already running", 409
     threading.Thread(target=_run_scheduled_worker, daemon=True).start()
@@ -1148,16 +1148,16 @@ def execute_agent_tool(name, args, user_id=None):
                 ident, freq, clock, zone, task_request, due = add_schedule(
                     DATABASE_URL, user_id, str(user_id), schedule_text
                 )
-                enabled = os.environ.get("ENABLE_RECURRING_TASKS", "").strip().lower() == "true"
+                enabled = recurring_tasks_enabled()
                 return {
                     "ok": True, "schedule_id": ident, "frequency": freq,
                     "local_time": clock, "timezone": zone, "request": task_request,
                     "first_run": due.isoformat(),
                     "automatic_delivery_enabled": enabled,
                     "delivery_note": (
-                        "Recurring AI delivery is enabled by the explicit environment opt-in; actual delivery still needs end-to-end verification."
+                        "Recurring AI delivery is enabled by the persistent owner-controlled scheduler setting; actual delivery still needs end-to-end verification."
                         if enabled else
-                        "The schedule is saved, but recurring AI execution is currently gated off. It will not deliver until ENABLE_RECURRING_TASKS=true is explicitly enabled after confirming the Gemini project has no billing account linked."
+                        "The schedule is saved, but recurring AI execution is currently off. The bot owner can enable it in private chat with /scheduler on after checking the Gemini project billing/quota settings."
                     )
                 }
             if name == "schedule_list":
@@ -1166,7 +1166,7 @@ def execute_agent_tool(name, args, user_id=None):
                     {"id": ident, "request": req, "frequency": freq, "local_time": clock,
                      "timezone": zone, "next_run": next_run.isoformat(), "paused": paused}
                     for ident, req, freq, clock, zone, next_run, paused in rows
-                ], "automatic_delivery_enabled": os.environ.get("ENABLE_RECURRING_TASKS", "").strip().lower() == "true"}
+                ], "automatic_delivery_enabled": recurring_tasks_enabled()}
             if name == "schedule_manage":
                 ident = int(args.get("schedule_id", 0))
                 action = str(args.get("action", "")).strip().lower()
