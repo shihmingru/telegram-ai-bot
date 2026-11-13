@@ -2,6 +2,7 @@ import os
 import hashlib
 import mimetypes
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import re
 from html.parser import HTMLParser
@@ -1497,19 +1498,42 @@ You can answer normally when web tools are unnecessary. You may use multiple too
     while budget.begin_step():
         print("Agent reasoning/tool step:", budget.steps_used, flush=True)
 
-        try:
-            print("Trying configured Gemini model: " + GEMINI_MODEL, flush=True)
-            response = gemini_client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    system_instruction=system_instruction,
-                    tools=tools,
-                ),
-            )
-        except Exception as error:
-            print("Configured Gemini model failed; no fallback will be attempted: " + repr(error), flush=True)
-            raise RuntimeError("Configured Gemini model unavailable or quota exhausted. No alternate model was tried to avoid unexpected billing.") from error
+        response = None
+        last_model_error = None
+        # Retry temporary provider overload on the SAME configured model only.
+        # Do not switch models or retry quota/authentication failures.
+        for attempt, delay in enumerate((0, 2, 5), start=1):
+            if delay:
+                time.sleep(delay)
+            try:
+                print("Trying configured Gemini model: " + GEMINI_MODEL + " (attempt " + str(attempt) + "/3)", flush=True)
+                response = gemini_client.models.generate_content(
+                    model=GEMINI_MODEL,
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_instruction,
+                        tools=tools,
+                    ),
+                )
+                last_model_error = None
+                break
+            except Exception as error:
+                last_model_error = error
+                error_text = repr(error)
+                is_temporary_overload = (
+                    "503" in error_text
+                    or "UNAVAILABLE" in error_text
+                    or "high demand" in error_text.lower()
+                )
+                print("Configured Gemini model attempt failed: " + error_text, flush=True)
+                if not is_temporary_overload or attempt == 3:
+                    break
+                print("Temporary Gemini overload; retrying the same model after backoff.", flush=True)
+        if last_model_error is not None:
+            raise RuntimeError(
+                "The configured Gemini model is temporarily unavailable or its quota is exhausted. "
+                "No alternate model was tried and no paid fallback was used."
+            ) from last_model_error
 
         function_calls = getattr(response, "function_calls", None) or []
 
